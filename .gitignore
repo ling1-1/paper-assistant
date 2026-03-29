@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# production
+/.next/
+/out/
+
+# env files - 绝对不要提交！
+.env.local
+.env.*.local
+
+# database
+*.db
+*.sqlite
+
+# misc
+.DS_Store
+*.pem
+npm-debug.log*

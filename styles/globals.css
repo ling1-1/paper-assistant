@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:#f2f0ea; --surface:#fff; --surface2:#f0ede6; --surface3:#e8e4dc;
+  --border:#e0dbd2; --border2:#ccc7bc;
+  --text:#1a1916; --text2:#65625d; --text3:#9e9b94;
+  --accent:#2d4a8a; --accent2:#4a68b5; --accent-bg:#edf0f8; --accent-border:#c8d4ef;
+  --user-bg:#2d4a8a; --user-text:#fff;
+  --green:#166534; --green-bg:#f0fdf4; --green-border:#bbf7d0;
+  --amber:#92400e; --amber-bg:#fffbeb; --amber-border:#fde68a;
+  --red:#991b1b; --red-bg:#fff1f2; --red-border:#fecdd3;
+  --purple:#581c87; --purple-bg:#faf5ff; --purple-border:#e9d5ff;
+  --radius:10px; --radius-sm:7px; --radius-lg:14px;
+  --shadow:0 1px 4px rgba(0,0,0,.07);
+  --shadow-md:0 3px 12px rgba(0,0,0,.1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'PingFang SC','Hiragino Sans GB','Microsoft YaHei',-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size: 14px;
+}
+
+button { font-family: inherit; cursor: pointer; }
+textarea, input { font-family: inherit; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: .4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text3);
+  animation: bounce 1.2s infinite;
+  display: inline-block;
+}
+.dot:nth-child(2) { animation-delay: .2s; }
+.dot:nth-child(3) { animation-delay: .4s; }
+
+.msg-in { animation: fadein .2s ease; }
+
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+.cursor-blink {
+  display: inline-block;
+  width: 2px; height: 14px;
+  background: var(--accent);
+  vertical-align: middle;
+  margin-left: 2px;
+  animation: cursor-blink .8s infinite;
+}
