@@ -15,6 +15,7 @@ export default function TranslatePage() {
   // PDF 相关状态
   const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
+  const [pdfBase64, setPdfBase64] = useState(''); // 存储原始 PDF base64
   const [isUploading, setIsUploading] = useState(false);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [extractedText, setExtractedText] = useState('');
@@ -201,6 +202,7 @@ export default function TranslatePage() {
           }
 
           setPdfFile(data);
+          setPdfBase64(base64); // 存储原始 PDF base64
           setExtractedText(data.text);
           setInputText(data.text);
           setPdfTotalPages(data.totalPages);
@@ -231,15 +233,16 @@ export default function TranslatePage() {
       let response;
       let data;
 
-      if (exportFormat === 'pdf' && pdfFile) {
+      if (exportFormat === 'pdf' && pdfBase64) {
         // PDF 覆盖导出（保留原排版）
         response = await fetch('/api/export-pdf-overlay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            originalPdfBase64: pdfFile.text ? `data:application/pdf;base64,${Buffer.from(inputText).toString('base64')}` : pdfFile.text,
+            originalPdfBase64: pdfBase64,
             translatedText: outputText,
             filename: pdfName || 'translation',
+            originalFilename: pdfName,
           }),
         });
       } else {

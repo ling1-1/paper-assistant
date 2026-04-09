@@ -3,14 +3,6 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const pdfjsLib = require('pdfjs-dist');
-const { getDocument, GlobalWorkerOptions } = pdfjsLib;
-
-// 设置 worker
-GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 export const config = {
   api: {
@@ -30,6 +22,7 @@ export default async function handler(req, res) {
       originalPdfBase64,
       translatedText,
       filename = 'translation',
+      originalFilename = 'original.pdf',
     } = req.body;
 
     if (!originalPdfBase64) {
@@ -40,8 +33,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: '未提供翻译文本' });
     }
 
-    // 解析原始 PDF
-    const pdfBuffer = Buffer.from(originalPdfBase64.split(',')[1], 'base64');
+    // 解析原始 PDF（处理 base64 或纯 base64 数据）
+    let pdfBuffer;
+    if (originalPdfBase64.startsWith('data:')) {
+      pdfBuffer = Buffer.from(originalPdfBase64.split(',')[1], 'base64');
+    } else {
+      pdfBuffer = Buffer.from(originalPdfBase64, 'base64');
+    }
     const uint8Array = new Uint8Array(pdfBuffer);
 
     // 使用 pdf-lib 加载 PDF
