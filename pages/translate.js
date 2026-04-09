@@ -25,6 +25,8 @@ export default function TranslatePage() {
   // 导出相关状态
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
+  const [showBilingual, setShowBilingual] = useState(false); // 双语对照模式
+  const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
   
   const outputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -259,21 +261,38 @@ export default function TranslatePage() {
     setError('');
 
     try {
-      // Word 导出（纯文本）
-      const response = await fetch('/api/export-docx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originalText: inputText,
-          translatedText: outputText,
-          filename: pdfName || 'translation',
-          sourceLang,
-          targetLang,
-          mode,
-        }),
-      });
+      let response;
+      let data;
 
-      const data = await response.json();
+      if (exportFormat === 'pdf' && pdfBase64) {
+        // PDF 导出（保留原排版）
+        response = await fetch('/api/export-pdf-overlay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            originalPdfBase64: pdfBase64,
+            translatedText: outputText,
+            filename: pdfName || 'translation',
+            originalFilename: pdfName,
+          }),
+        });
+      } else {
+        // Word 导出（纯文本）
+        response = await fetch('/api/export-docx', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            originalText: inputText,
+            translatedText: outputText,
+            filename: pdfName || 'translation',
+            sourceLang,
+            targetLang,
+            mode,
+          }),
+        });
+      }
+
+      data = await response.json();
 
       if (!response.ok) {
         throw new Error(data.error || data.message || '导出失败');
@@ -442,8 +461,32 @@ export default function TranslatePage() {
               {/* 操作按钮 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  导出
+                  导出格式
                 </label>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => setExportFormat('docx')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                      exportFormat === 'docx'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    📄 Word
+                  </button>
+                  <button
+                    onClick={() => setExportFormat('pdf')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                      exportFormat === 'pdf'
+                        ? 'bg-red-600 text-white border-red-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                    title="PDF 导出（保留原排版）"
+                    disabled={!pdfBase64}
+                  >
+                    📕 PDF {!pdfBase64 && '(需先上传 PDF)'}
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleTranslate}
@@ -457,21 +500,34 @@ export default function TranslatePage() {
                     {isTranslating ? '翻译中...' : '开始翻译'}
                   </button>
                   <button
+                    onClick={() => setShowBilingual(!showBilingual)}
+                    disabled={!outputText}
+                    className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                      !outputText
+                        ? 'bg-gray-300 cursor-not-allowed'
+                        : showBilingual
+                          ? 'bg-green-600 text-white hover:bg-green-700'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                    title="双语对照预览"
+                  >
+                    {showBilingual ? '📖 对照中' : '📖 双语对照'}
+                  </button>
+                  <button
                     onClick={handleExport}
                     disabled={isExporting || !outputText}
                     className={`px-4 py-2 rounded-lg font-medium transition-all ${
                       isExporting || !outputText
                         ? 'bg-gray-300 cursor-not-allowed'
-                        : 'bg-purple-600 text-white hover:bg-purple-700'
+                        : exportFormat === 'pdf'
+                          ? 'bg-red-600 text-white hover:bg-red-700'
+                          : 'bg-purple-600 text-white hover:bg-purple-700'
                     }`}
-                    title="导出为 Word 文档"
+                    title={exportFormat === 'pdf' ? 'PDF 导出（保留原排版）' : '导出为 Word 文档'}
                   >
-                    {isExporting ? '导出中...' : '📄 导出 Word'}
+                    {isExporting ? '导出中...' : (exportFormat === 'pdf' ? '📕 PDF' : '📄 Word')}
                   </button>
                 </div>
-                <p className="mt-2 text-xs text-gray-500">
-                  ℹ️ 当前仅支持 Word 导出（PDF 中文字体支持开发中）
-                </p>
               </div>
             </div>
 
@@ -499,78 +555,104 @@ export default function TranslatePage() {
           </div>
 
           {/* 翻译区域 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* 输入框 */}
+          {showBilingual ? (
+            /* 双语对照模式 */
             <div className="bg-white rounded-xl shadow-lg p-6">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-800">
-                  {getModeTitle()}
-                </h2>
+                <h2 className="text-lg font-semibold text-gray-800">📖 双语对照预览</h2>
                 <button
-                  onClick={handlePaste}
-                  className="text-sm text-blue-600 hover:text-blue-800 transition-colors"
+                  onClick={() => setShowBilingual(false)}
+                  className="text-sm text-gray-600 hover:text-gray-800"
                 >
-                  📋 粘贴
+                  返回普通视图
                 </button>
               </div>
-              <textarea
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder={getModeHint()}
-                className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-              />
-              <div className="mt-2 text-sm text-gray-500 text-right">
-                {inputText.length} 字符
-              </div>
-            </div>
-
-            {/* 输出框 */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-800">
-                  {getOutputTitle()}
-                </h2>
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleExport}
-                    disabled={isExporting || !outputText}
-                    className={`text-sm transition-colors ${
-                      outputText
-                        ? 'text-purple-600 hover:text-purple-800'
-                        : 'text-gray-400 cursor-not-allowed'
-                    }`}
-                    title="导出为 Word 文档"
-                  >
-                    {isExporting ? '⏳ 导出中...' : '📥 导出 Word'}
-                  </button>
-                  <button
-                    onClick={handleCopy}
-                    disabled={!outputText}
-                    className={`text-sm transition-colors ${
-                      outputText
-                        ? 'text-blue-600 hover:text-blue-800'
-                        : 'text-gray-400 cursor-not-allowed'
-                    }`}
-                  >
-                    📋 复制
-                  </button>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px] overflow-hidden">
+                <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-blue-50">
+                  <h3 className="font-semibold text-gray-700 mb-3 sticky top-0 bg-blue-50">📝 原文</h3>
+                  <div className="font-mono text-sm whitespace-pre-wrap">{inputText}</div>
+                </div>
+                <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-green-50">
+                  <h3 className="font-semibold text-gray-700 mb-3 sticky top-0 bg-green-50">🌐 译文</h3>
+                  <div className="font-mono text-sm whitespace-pre-wrap">{outputText}</div>
                 </div>
               </div>
-              <div
-                ref={outputRef}
-                className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg overflow-auto bg-gray-50 font-mono text-sm whitespace-pre-wrap"
-              >
-                {outputText || (
-                  <span className="text-gray-400">翻译结果将显示在这里...</span>
+            </div>
+          ) : (
+            /* 普通模式 */
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* 输入框 */}
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-semibold text-gray-800">
+                    {getModeTitle()}
+                  </h2>
+                  <button
+                    onClick={handlePaste}
+                    className="text-sm text-blue-600 hover:text-blue-800 transition-colors"
+                  >
+                    📋 粘贴
+                  </button>
+                </div>
+                <textarea
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder={getModeHint()}
+                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
+                />
+                <div className="mt-2 text-sm text-gray-500 text-right">
+                  {inputText.length} 字符
+                </div>
+              </div>
+
+              {/* 输出框 */}
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-semibold text-gray-800">
+                    {getOutputTitle()}
+                  </h2>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleExport}
+                      disabled={isExporting || !outputText}
+                      className={`text-sm transition-colors ${
+                        outputText
+                          ? 'text-purple-600 hover:text-purple-800'
+                          : 'text-gray-400 cursor-not-allowed'
+                      }`}
+                      title="导出为 Word 文档"
+                    >
+                      {isExporting ? '⏳ 导出中...' : '📥 导出 Word'}
+                    </button>
+                    <button
+                      onClick={handleCopy}
+                      disabled={!outputText}
+                      className={`text-sm transition-colors ${
+                        outputText
+                          ? 'text-blue-600 hover:text-blue-800'
+                          : 'text-gray-400 cursor-not-allowed'
+                      }`}
+                    >
+                      📋 复制
+                    </button>
+                  </div>
+                </div>
+                <div
+                  ref={outputRef}
+                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg overflow-auto bg-gray-50 font-mono text-sm whitespace-pre-wrap"
+                >
+                  {outputText || (
+                    <span className="text-gray-400">翻译结果将显示在这里...</span>
+                  )}
+                </div>
+                {error && (
+                  <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                    ❌ {error}
+                  </div>
                 )}
               </div>
-              {error && (
-                <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  ❌ {error}
-                </div>
-              )}
             </div>
-          </div>
+          )}
 
           {/* 功能说明 */}
           <div className="mt-8 bg-white rounded-xl shadow-lg p-6">
