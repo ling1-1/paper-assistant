@@ -1,8 +1,5 @@
 // pages/api/translate-direct.js — 直接上传 PDF 给火山方舟翻译
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const fetch = require('node-fetch');
+// 使用原生 fetch（Node.js 18+ 支持）
 
 export const config = {
   api: {
