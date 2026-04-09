@@ -33,7 +33,7 @@ export default async function handler(req, res) {
 
     // 火山方舟 API 配置
     const apiKey = process.env.VOLC_API_KEY;
-    const model = process.env.VOLC_MODEL || 'doubao-pro-32k';
+    const model = 'ep-20260309122322-xwfhv'; // Doubao-Seed-2.0-pro
     
     if (!apiKey || apiKey.includes('在此填入')) {
       return res.status(500).json({ 
@@ -68,7 +68,7 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'doubao-vision-pro-32k', // 使用多模态模型
+        model: model, // Doubao-Seed-2.0-pro
         messages: [
           {
             role: 'system',
