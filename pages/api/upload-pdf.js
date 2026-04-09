@@ -2,7 +2,10 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const { PDFParse } = require('pdf-parse');
 
 export const config = {
   api: {
@@ -38,15 +41,17 @@ export default async function handler(req, res) {
     const filepath = join(uploadDir, safeFilename);
     await writeFile(filepath, buffer);
 
-    // 解析 PDF
-    const pdfData = await pdfParse(buffer);
-    const text = pdfData.text;
-    const totalPages = pdfData.numpages;
+    // 解析 PDF（pdf-parse v2 API）
+    const uint8Array = new Uint8Array(buffer);
+    const parser = new PDFParse(uint8Array);
+    const result = await parser.getText();
+    const text = result.text;
+    const totalPages = result.pageCount;
 
     // 提取元数据
     const metadata = {
-      info: pdfData.info || {},
-      version: pdfData.version,
+      info: result.info || {},
+      version: result.version,
     };
 
     return res.status(200).json({
