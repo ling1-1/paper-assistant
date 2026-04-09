@@ -26,7 +26,6 @@ export default function TranslatePage() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
   const [showBilingual, setShowBilingual] = useState(false); // 双语对照模式
-  const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
   
   const outputRef = useRef(null);
   const fileInputRef = useRef(null);
