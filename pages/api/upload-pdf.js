@@ -45,7 +45,15 @@ export default async function handler(req, res) {
     const uint8Array = new Uint8Array(buffer);
     const parser = new PDFParse(uint8Array);
     const result = await parser.getText();
-    const text = result.text;
+    
+    // 优化文本：保留段落结构
+    let text = result.text;
+    
+    // 清理多余空行，但保留段落分隔
+    text = text.replace(/\n{3,}/g, '\n\n');
+    
+    // 尝试识别双栏排版：如果一行突然从中间断开，尝试合并
+    // 简单策略：按页码分隔符分割，然后逐段处理
     const totalPages = result.pageCount;
 
     // 提取元数据

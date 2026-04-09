@@ -18,6 +18,7 @@ export default function TranslatePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [extractedText, setExtractedText] = useState('');
+  const [useAdvancedPdf, setUseAdvancedPdf] = useState(true); // 使用增强版 PDF 解析
   
   // 导出相关状态
   const [isExporting, setIsExporting] = useState(false);
@@ -180,7 +181,10 @@ export default function TranslatePage() {
         const base64 = event.target.result;
 
         try {
-          const response = await fetch('/api/upload-pdf', {
+          // 选择 API：增强版或普通版
+          const apiEndpoint = useAdvancedPdf ? '/api/upload-pdf-advanced' : '/api/upload-pdf';
+          
+          const response = await fetch(apiEndpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -436,7 +440,7 @@ export default function TranslatePage() {
             </div>
 
             {/* 高级选项 */}
-            <div className="mt-4 flex items-center gap-4">
+            <div className="mt-4 flex items-center gap-4 flex-wrap">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -445,6 +449,15 @@ export default function TranslatePage() {
                   className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
                 />
                 <span className="text-sm text-gray-600">流式输出（实时显示）</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useAdvancedPdf}
+                  onChange={(e) => setUseAdvancedPdf(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-600">增强版 PDF 解析（保留排版）✨</span>
               </label>
             </div>
           </div>
