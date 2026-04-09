@@ -2,13 +2,10 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { createRequire } from 'module';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 
-const require = createRequire(import.meta.url);
-const pdfjsLib = require('pdfjs-dist');
-
-// 设置 worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve('pdfjs-dist/build/pdf.worker.mjs');
+// 设置 worker（使用 CDN）
+GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 export const config = {
   api: {
@@ -46,7 +43,7 @@ export default async function handler(req, res) {
     await writeFile(filepath, buffer);
 
     // 使用 PDF.js 加载文档
-    const loadingTask = pdfjsLib.getDocument(uint8Array);
+    const loadingTask = getDocument(uint8Array);
     const pdf = await loadingTask.promise;
     const totalPages = pdf.numPages;
 
