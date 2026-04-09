@@ -11,6 +11,7 @@ export default function TranslatePage() {
   const [field, setField] = useState('general');
   const [streamMode, setStreamMode] = useState(true);
   const [error, setError] = useState('');
+  const [directPdfMode, setDirectPdfMode] = useState(false); // 直接上传 PDF 给火山方舟
   
   // PDF 相关状态
   const [pdfFile, setPdfFile] = useState(null);
