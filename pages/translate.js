@@ -233,21 +233,20 @@ export default function TranslatePage() {
       let data;
 
       // Word 导出（纯文本）
-        response = await fetch('/api/export-docx', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            originalText: inputText,
-            translatedText: outputText,
-            filename: pdfName || 'translation',
-            sourceLang,
-            targetLang,
-            mode,
-          }),
-        });
-      }
+      const response = await fetch('/api/export-docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          originalText: inputText,
+          translatedText: outputText,
+          filename: pdfName || 'translation',
+          sourceLang,
+          targetLang,
+          mode,
+        }),
+      });
 
-      data = await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
         throw new Error(data.error || data.message || '导出失败');
