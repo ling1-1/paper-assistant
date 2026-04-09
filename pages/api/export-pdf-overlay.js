@@ -1,13 +1,8 @@
 // pages/api/export-pdf-overlay.js — PDF 覆盖导出（保留原排版）
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
-const fontkit = require('@pdf-lib/fontkit');
-const fs = require('fs');
 
 export const config = {
   api: {
@@ -53,9 +48,6 @@ export default async function handler(req, res) {
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
     // 简单策略：在每页底部添加翻译文本
-    // TODO: 更智能的方案是按段落位置覆盖
-    
-    // 将翻译文本按页分割（简单按长度分割）
     const charsPerPage = 500; // 每页约 500 字符
     const textPages = [];
     for (let i = 0; i < translatedText.length; i += charsPerPage) {
@@ -68,7 +60,6 @@ export default async function handler(req, res) {
       const { height } = page.getSize();
       const text = textPages[i];
       
-      // 在页面底部添加半透明背景
       const lines = text.split('\n').filter(line => line.trim());
       const lineHeight = 12;
       const startY = height - 150; // 从页面 150px 处开始
@@ -115,7 +106,6 @@ export default async function handler(req, res) {
       const { height } = newPage.getSize();
       const text = textPages[i];
       
-      // 绘制背景
       const lines = text.split('\n').filter(line => line.trim());
       const lineHeight = 12;
       const startY = height - 100;
@@ -129,7 +119,6 @@ export default async function handler(req, res) {
         opacity: 0.8,
       });
 
-      // 添加翻译文本
       let y = startY;
       lines.forEach((line) => {
         if (line.trim()) {
