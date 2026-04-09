@@ -22,6 +22,7 @@ export default function TranslatePage() {
   
   // 导出相关状态
   const [isExporting, setIsExporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
   
   const outputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -216,7 +217,7 @@ export default function TranslatePage() {
     }
   };
 
-  // 导出为 Word
+  // 导出为 Word 或 PDF
   const handleExport = async () => {
     if (!outputText) {
       setError('没有可导出的翻译结果');
@@ -227,20 +228,37 @@ export default function TranslatePage() {
     setError('');
 
     try {
-      const response = await fetch('/api/export-docx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originalText: inputText,
-          translatedText: outputText,
-          filename: pdfName || 'translation',
-          sourceLang,
-          targetLang,
-          mode,
-        }),
-      });
+      let response;
+      let data;
 
-      const data = await response.json();
+      if (exportFormat === 'pdf' && pdfFile) {
+        // PDF 覆盖导出（保留原排版）
+        response = await fetch('/api/export-pdf-overlay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            originalPdfBase64: pdfFile.text ? `data:application/pdf;base64,${Buffer.from(inputText).toString('base64')}` : pdfFile.text,
+            translatedText: outputText,
+            filename: pdfName || 'translation',
+          }),
+        });
+      } else {
+        // Word 导出（纯文本）
+        response = await fetch('/api/export-docx', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            originalText: inputText,
+            translatedText: outputText,
+            filename: pdfName || 'translation',
+            sourceLang,
+            targetLang,
+            mode,
+          }),
+        });
+      }
+
+      data = await response.json();
 
       if (!response.ok) {
         throw new Error(data.error || data.message || '导出失败');
@@ -409,8 +427,31 @@ export default function TranslatePage() {
               {/* 操作按钮 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  操作
+                  导出格式
                 </label>
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={() => setExportFormat('docx')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                      exportFormat === 'docx'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    📄 Word
+                  </button>
+                  <button
+                    onClick={() => setExportFormat('pdf')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                      exportFormat === 'pdf'
+                        ? 'bg-red-600 text-white border-red-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    }`}
+                    title="PDF 覆盖导出（保留原排版）✨"
+                  >
+                    📕 PDF ✨
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleTranslate}
@@ -429,11 +470,13 @@ export default function TranslatePage() {
                     className={`px-4 py-2 rounded-lg font-medium transition-all ${
                       isExporting || !outputText
                         ? 'bg-gray-300 cursor-not-allowed'
-                        : 'bg-purple-600 text-white hover:bg-purple-700'
+                        : exportFormat === 'pdf'
+                          ? 'bg-red-600 text-white hover:bg-red-700'
+                          : 'bg-purple-600 text-white hover:bg-purple-700'
                     }`}
-                    title="导出为 Word 文档"
+                    title={exportFormat === 'pdf' ? 'PDF 覆盖导出（保留原排版）' : '导出为 Word 文档'}
                   >
-                    {isExporting ? '导出中...' : '📥 导出'}
+                    {isExporting ? '导出中...' : (exportFormat === 'pdf' ? '📕 PDF' : '📄 Word')}
                   </button>
                 </div>
               </div>
