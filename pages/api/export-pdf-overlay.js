@@ -1,8 +1,13 @@
 // pages/api/export-pdf-overlay.js — PDF 覆盖导出（保留原排版）
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb } from 'pdf-lib';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const fontkit = require('@pdf-lib/fontkit');
+const fs = require('fs');
 
 export const config = {
   api: {
