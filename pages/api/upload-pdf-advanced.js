@@ -2,7 +2,12 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+// 使用 legacy build（Node.js 环境）
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
+const { getDocument, GlobalWorkerOptions } = pdfjsLib;
 
 // 设置 worker（使用 CDN）
 GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
