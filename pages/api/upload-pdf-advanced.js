@@ -1,16 +1,12 @@
-// pages/api/upload-pdf-advanced.js — PDF 上传与文本提取（PDF.js 增强版）
+// pages/api/upload-pdf-advanced.js — PDF 上传与文本提取
+// 使用 pdf-parse（与 upload-pdf.js 相同，待后续增强）
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-// 使用 legacy build（Node.js 环境）
-const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.mjs');
-const { getDocument, GlobalWorkerOptions } = pdfjsLib;
-
-// 设置 worker（使用 CDN）
-GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const { PDFParse } = require('pdf-parse');
 
 export const config = {
   api: {
@@ -47,70 +43,31 @@ export default async function handler(req, res) {
     const filepath = join(uploadDir, safeFilename);
     await writeFile(filepath, buffer);
 
-    // 使用 PDF.js 加载文档
-    const loadingTask = getDocument(uint8Array);
-    const pdf = await loadingTask.promise;
-    const totalPages = pdf.numPages;
+    // 解析 PDF（pdf-parse v2 API）
+    const parser = new PDFParse(uint8Array);
+    const result = await parser.getText();
+    
+    // 优化文本：保留段落结构
+    let text = result.text;
+    
+    // 清理多余空行，但保留段落分隔
+    text = text.replace(/\n{3,}/g, '\n\n');
+    
+    const totalPages = result.pageCount;
 
-    // 逐页提取文本，保留段落结构
-    const pages = [];
-    for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      
-      // 提取文本项及其位置信息
-      const items = textContent.items.map(item => ({
-        str: item.str,
-        x: item.transform[4],
-        y: item.transform[5],
-        width: item.width,
-        height: item.height,
-      }));
-
-      // 按 Y 坐标分组（同一行的文本）
-      const rows = [];
-      const yThreshold = 5; // 同一行的 Y 坐标容差
-      
-      items.forEach(item => {
-        if (!item.str.trim()) return;
-        
-        // 查找是否已有相近 Y 坐标的行
-        let foundRow = rows.find(row => Math.abs(row.y - item.y) < yThreshold);
-        
-        if (foundRow) {
-          foundRow.items.push(item);
-        } else {
-          rows.push({ y: item.y, items: [item] });
-        }
-      });
-
-      // 按 Y 坐标降序排序（从上到下）
-      rows.sort((a, b) => b.y - a.y);
-
-      // 每行内按 X 坐标排序（从左到右），然后拼接
-      const pageText = rows.map(row => {
-        row.items.sort((a, b) => a.x - b.x);
-        return row.items.map(item => item.str).join(' ');
-      }).join('\n');
-
-      pages.push(pageText);
-    }
-
-    // 合并所有页面，用分页符分隔
-    const text = pages.join('\n\n--- 分页 ---\n\n');
-
-    // 清理多余空行
-    const cleanedText = text.replace(/\n{3,}/g, '\n\n');
+    // 提取元数据
+    const metadata = {
+      info: result.info || {},
+      version: result.version,
+    };
 
     return res.status(200).json({
       success: true,
       filename: safeFilename,
       originalFilename: filename,
-      text: cleanedText,
+      text,
       totalPages,
-      metadata: {
-        info: pdf._pdfInfo?.info || {},
-      },
+      metadata,
       filepath,
     });
   } catch (err) {
