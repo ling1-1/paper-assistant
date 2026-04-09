@@ -349,6 +349,16 @@ export default function App() {
                 color: tab === id ? 'white' : 'var(--text2)',
               }}>{label}</button>
             ))}
+            <a href="/translate" target="_blank" style={{
+              padding: '4px 11px', borderRadius: 6, fontSize: 12, fontWeight: 400,
+              border: '1px solid var(--border)',
+              background: 'transparent',
+              color: 'var(--text2)',
+              textDecoration: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}>🌐 翻译</a>
           </div>
 
           <div style={{ flex: 1 }} />
