@@ -229,9 +229,6 @@ export default function TranslatePage() {
     setError('');
 
     try {
-      let response;
-      let data;
-
       // Word 导出（纯文本）
       const response = await fetch('/api/export-docx', {
         method: 'POST',
