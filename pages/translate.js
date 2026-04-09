@@ -11,7 +11,6 @@ export default function TranslatePage() {
   const [field, setField] = useState('general');
   const [streamMode, setStreamMode] = useState(true);
   const [error, setError] = useState('');
-  const [directPdfMode, setDirectPdfMode] = useState(false); // 直接上传 PDF 给 AI
   
   // PDF 相关状态
   const [pdfFile, setPdfFile] = useState(null);
@@ -70,99 +69,69 @@ export default function TranslatePage() {
     }
   };
 
-  // 翻译处理
+  // 翻译处理（流式）
   const handleTranslate = async () => {
+    if (!inputText.trim()) {
+      setError('请输入要翻译的内容');
+      return;
+    }
+
     setIsTranslating(true);
     setError('');
     setOutputText('');
 
     try {
-      let response;
-      let data;
+      const response = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: inputText,
+          mode,
+          sourceLang,
+          targetLang,
+          field,
+          stream: streamMode,
+        }),
+      });
 
-      if (directPdfMode && pdfBase64) {
-        // 直接上传 PDF 给 AI（Claude）
-        response = await fetch('/api/translate-direct', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pdfBase64,
-            filename: pdfName,
-            mode,
-            sourceLang,
-            targetLang,
-            field,
-            model: 'claude',
-          }),
-        });
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || '翻译失败');
+      }
 
-        data = await response.json();
+      if (streamMode) {
+        // 流式读取
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-        if (!response.ok) {
-          throw new Error(data.error || data.message || '翻译失败');
-        }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        setOutputText(data.translation);
-      } else {
-        // 普通文本翻译
-        if (!inputText.trim()) {
-          setError('请输入要翻译的内容');
-          setIsTranslating(false);
-          return;
-        }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // 保留不完整行
 
-        response = await fetch('/api/translate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: inputText,
-            mode,
-            sourceLang,
-            targetLang,
-            field,
-            stream: streamMode,
-          }),
-        });
-
-        if (!response.ok) {
-          const errData = await response.json();
-          throw new Error(errData.error || '翻译失败');
-        }
-
-        if (streamMode) {
-          // 流式读取
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // 保留不完整行
-
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-              const data = JSON.parse(line.slice(6));
-              
-              if (data.error) {
-                throw new Error(data.error);
-              }
-              if (data.chunk) {
-                setOutputText(prev => prev + data.chunk);
-              }
-              if (data.done) {
-                break;
-              }
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = JSON.parse(line.slice(6));
+            
+            if (data.error) {
+              throw new Error(data.error);
+            }
+            if (data.chunk) {
+              setOutputText(prev => prev + data.chunk);
+            }
+            if (data.done) {
+              break;
             }
           }
-        } else {
-          // 非流式
-          const data = await response.json();
-          setOutputText(data.translation);
         }
+      } else {
+        // 非流式
+        const data = await response.json();
+        setOutputText(data.translation);
       }
     } catch (err) {
       setError(err.message);
@@ -494,16 +463,7 @@ export default function TranslatePage() {
                   onChange={(e) => setUseAdvancedPdf(e.target.checked)}
                   className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
                 />
-                <span className="text-sm text-gray-600">增强版 PDF 解析</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={directPdfMode}
-                  onChange={(e) => setDirectPdfMode(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm text-gray-600">🚀 直接上传 PDF 给 Claude（推荐）✨</span>
+                <span className="text-sm text-gray-600">增强版 PDF 解析（保留排版）✨</span>
               </label>
             </div>
           </div>
