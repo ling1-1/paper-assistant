@@ -263,16 +263,16 @@ export default function TranslatePage() {
       let response;
       let data;
 
-      if (exportFormat === 'pdf' && pdfBase64) {
-        // PDF 导出（保留原排版）
-        response = await fetch('/api/export-pdf-overlay', {
+      if (exportFormat === 'pdf') {
+        // PDF 导出（支持中文）
+        response = await fetch('/api/export-pdf-better', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            originalPdfBase64: pdfBase64,
+            originalText: inputText,
             translatedText: outputText,
             filename: pdfName || 'translation',
-            originalFilename: pdfName,
+            mode: 'bilingual',
           }),
         });
       } else {
