@@ -70,18 +70,46 @@ export default function TranslatePage() {
     }
   };
 
-  // 翻译处理（流式）
+  // 翻译处理
   const handleTranslate = async () => {
-    if (!inputText.trim()) {
-      setError('请输入要翻译的内容');
-      return;
-    }
-
     setIsTranslating(true);
     setError('');
     setOutputText('');
 
     try {
+      if (directPdfMode && pdfBase64) {
+        // 直接上传 PDF 给火山方舟
+        const response = await fetch('/api/translate-direct', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pdfBase64,
+            filename: pdfName,
+            mode,
+            sourceLang,
+            targetLang,
+            field,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || data.message || '翻译失败');
+        }
+
+        setOutputText(data.translation);
+        setIsTranslating(false);
+        return;
+      }
+
+      // 普通文本翻译
+      if (!inputText.trim()) {
+        setError('请输入要翻译的内容');
+        setIsTranslating(false);
+        return;
+      }
+
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -460,11 +488,11 @@ export default function TranslatePage() {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={useAdvancedPdf}
-                  onChange={(e) => setUseAdvancedPdf(e.target.checked)}
+                  checked={directPdfMode}
+                  onChange={(e) => setDirectPdfMode(e.target.checked)}
                   className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
                 />
-                <span className="text-sm text-gray-600">增强版 PDF 解析（保留排版）✨</span>
+                <span className="text-sm text-gray-600">🚀 直接上传 PDF 给火山方舟（推荐）✨</span>
               </label>
             </div>
           </div>
