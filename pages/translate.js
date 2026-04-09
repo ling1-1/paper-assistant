@@ -25,6 +25,48 @@ export default function TranslatePage() {
   const outputRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  // 获取当前模式的提示文本
+  const getModeHint = () => {
+    switch (mode) {
+      case 'translate':
+        return sourceLang === 'en' ? '请输入英文内容...' : '请输入中文内容...';
+      case 'explain':
+        return '请输入要解释的专业术语或句子...';
+      case 'polish':
+        return sourceLang === 'en' ? '请输入要润色的英文内容...' : '请输入要润色的中文内容...';
+      default:
+        return '请输入内容...';
+    }
+  };
+
+  // 获取当前模式的标题
+  const getModeTitle = () => {
+    switch (mode) {
+      case 'translate':
+        return `${sourceLang === 'en' ? '英文' : '中文'}原文`;
+      case 'explain':
+        return '待解释内容';
+      case 'polish':
+        return `${sourceLang === 'en' ? '英文' : '中文'}原文`;
+      default:
+        return '原文';
+    }
+  };
+
+  // 获取输出框标题
+  const getOutputTitle = () => {
+    switch (mode) {
+      case 'translate':
+        return `${targetLang === 'en' ? '英文' : '中文'}翻译`;
+      case 'explain':
+        return '术语解释';
+      case 'polish':
+        return `${targetLang === 'en' ? '英文' : '中文'}润色`;
+      default:
+        return '输出';
+    }
+  };
+
   // 翻译处理（流式）
   const handleTranslate = async () => {
     if (!inputText.trim()) {
@@ -324,6 +366,7 @@ export default function TranslatePage() {
                   <option value="medicine">🏥 医学</option>
                   <option value="engineering">⚙️ 工程</option>
                   <option value="biology">🧬 生物学</option>
+                  <option value="chemistry">🧪 化学化工</option>
                 </select>
               </div>
 
@@ -412,7 +455,7 @@ export default function TranslatePage() {
             <div className="bg-white rounded-xl shadow-lg p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold text-gray-800">
-                  {sourceLang === 'en' ? '英文原文' : '中文原文'}
+                  {getModeTitle()}
                 </h2>
                 <button
                   onClick={handlePaste}
@@ -424,7 +467,7 @@ export default function TranslatePage() {
               <textarea
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder={`请输入${sourceLang === 'en' ? '英文' : '中文'}内容...`}
+                placeholder={getModeHint()}
                 className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
               />
               <div className="mt-2 text-sm text-gray-500 text-right">
@@ -436,7 +479,7 @@ export default function TranslatePage() {
             <div className="bg-white rounded-xl shadow-lg p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold text-gray-800">
-                  {targetLang === 'en' ? '英文翻译' : '中文翻译'}
+                  {getOutputTitle()}
                 </h2>
                 <div className="flex gap-3">
                   <button
