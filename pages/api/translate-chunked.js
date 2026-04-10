@@ -11,16 +11,17 @@ export const config = {
   },
 };
 
-const TRANSLATE_PROMPT = `你是一位专业的学术论文翻译专家。请翻译下面的论文片段，要求：
+const TRANSLATE_PROMPT = `你是一位专业的学术论文翻译专家。请翻译下面的整篇论文，要求：
 1. 仅输出译文正文，不要解释。
 2. 保留 LaTeX 公式、化学分子式、数学符号、引用编号、图表编号和单位。
 3. 保留段落结构。
-4. 输出语言为中文，风格正式、准确。`;
+4. 输出语言为中文，风格正式、准确。
+5. 直接输出完整译文，不要分段。`;
 
 /**
- * 将文本分割成块 (每块约 1500 字符 - 优化速度)
+ * 整篇翻译，不分块（豆包支持长文本）
  */
-function splitIntoChunks(text, maxChars = 1500) {
+function splitIntoChunks(text, maxChars = 15000) {
   const chunks = [];
   
   // 先按段落分
@@ -88,11 +89,11 @@ export default async function handler(req, res) {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
-    // 分割文本
-    const chunks = splitIntoChunks(text, 1500);
+    // 整篇翻译，不分块（豆包支持长文本）
+    const chunks = splitIntoChunks(text, 15000);
     const totalChunks = chunks.length;
     
-    console.log(`[translate-chunked] 开始翻译，共${totalChunks}块，每块 1500 字符`);
+    console.log(`[translate-chunked] 开始翻译，共${totalChunks}块，每块最大 15000 字符`);
 
     console.log(`[translate-chunked] 开始翻译，共${totalChunks}块`);
 
