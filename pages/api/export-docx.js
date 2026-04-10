@@ -3,6 +3,7 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { normalizeParagraphs } from '../../lib/translationPipeline';
 
 export const config = {
   api: {
@@ -26,6 +27,43 @@ export default async function handler(req, res) {
       targetLang = 'zh',
       mode = 'translate',
     } = req.body;
+
+    const originalParagraphs = normalizeParagraphs(originalText || '');
+    const translatedParagraphs = normalizeParagraphs(translatedText || '');
+    const bilingualChildren = [];
+    const totalParagraphs = Math.max(originalParagraphs.length, translatedParagraphs.length);
+
+    for (let index = 0; index < totalParagraphs; index += 1) {
+      if (originalParagraphs[index]) {
+        bilingualChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: `原文 ${index + 1}`, bold: true, color: '1d4ed8' })],
+            spacing: { before: 200, after: 100 },
+          }),
+        );
+        bilingualChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: originalParagraphs[index], size: 24 })],
+            spacing: { after: 200 },
+          }),
+        );
+      }
+
+      if (translatedParagraphs[index]) {
+        bilingualChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: `译文 ${index + 1}`, bold: true, color: '047857' })],
+            spacing: { before: 100, after: 100 },
+          }),
+        );
+        bilingualChildren.push(
+          new Paragraph({
+            children: [new TextRun({ text: translatedParagraphs[index], size: 24 })],
+            spacing: { after: 240 },
+          }),
+        );
+      }
+    }
 
     // 创建 Word 文档
     const doc = new Document({
@@ -65,45 +103,14 @@ export default async function handler(req, res) {
             spacing: { after: 400 },
           }),
 
-          // 原文
           new Paragraph({
-            text: `📝 原文 (${sourceLang === 'en' ? 'English' : '中文'})`,
+            text: `📖 双语对照 (${sourceLang === 'en' ? 'English' : '中文'} / ${targetLang === 'en' ? 'English' : '中文'})`,
             heading: HeadingLevel.HEADING_2,
             spacing: { before: 400, after: 200 },
           }),
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: originalText || '（无原文）',
-                size: 24,
-              }),
-            ],
-            spacing: { after: 400 },
-          }),
-
-          // 分隔线
-          new Paragraph({
-            border: {
-              bottom: { color: 'auto', space: 1, value: 'single', size: 6 },
-            },
-            spacing: { after: 400 },
-          }),
-
-          // 译文
-          new Paragraph({
-            text: `🌐 译文 (${targetLang === 'en' ? 'English' : '中文'})`,
-            heading: HeadingLevel.HEADING_2,
-            spacing: { before: 400, after: 200 },
-          }),
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: translatedText || '（无译文）',
-                size: 24,
-              }),
-            ],
-            spacing: { after: 400 },
-          }),
+          ...(bilingualChildren.length
+            ? bilingualChildren
+            : [new Paragraph({ text: '（无可导出的内容）', spacing: { after: 400 } })]),
 
           // 页脚
           new Paragraph({

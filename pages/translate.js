@@ -1,5 +1,4 @@
-import { useState, useRef } from 'react';
-import Head from 'next/head';
+import { useRef, useState } from 'react';
 
 export default function TranslatePage() {
   const [inputText, setInputText] = useState('');
@@ -11,22 +10,24 @@ export default function TranslatePage() {
   const [field, setField] = useState('general');
   const [streamMode, setStreamMode] = useState(true);
   const [error, setError] = useState('');
-  const [directPdfMode, setDirectPdfMode] = useState(false); // 直接上传 PDF 给火山方舟
+  const [translationMeta, setTranslationMeta] = useState(null);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [progressLogs, setProgressLogs] = useState([]);
   
   // PDF 相关状态
-  const [pdfFile, setPdfFile] = useState(null);
   const [pdfName, setPdfName] = useState('');
   const [pdfBase64, setPdfBase64] = useState(''); // 存储原始 PDF base64
   const [isUploading, setIsUploading] = useState(false);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [extractedText, setExtractedText] = useState('');
-  const [useAdvancedPdf, setUseAdvancedPdf] = useState(true); // 使用增强版 PDF 解析
+  const [pdfPages, setPdfPages] = useState([]);
   
   // 导出相关状态
   const [isExporting, setIsExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState('docx'); // 'docx' | 'pdf'
   const [showBilingual, setShowBilingual] = useState(false); // 双语对照模式
-  
+
   const outputRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -77,16 +78,23 @@ export default function TranslatePage() {
     setIsTranslating(true);
     setError('');
     setOutputText('');
+    setTranslationMeta(null);
+    setProgressMessage('准备开始翻译...');
+    setProgressPercent(0);
+    setProgressLogs([]);
 
     try {
-      if (directPdfMode && pdfBase64) {
-        // 直接上传 PDF 给火山方舟
+      if (pdfBase64 && mode === 'translate') {
+        // PDF 论文翻译统一走论文模式
         const response = await fetch('/api/translate-direct', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             pdfBase64,
             filename: pdfName,
+            extractedText,
+            pdfPages,
+            stream: true,
             mode,
             sourceLang,
             targetLang,
@@ -94,14 +102,54 @@ export default function TranslatePage() {
           }),
         });
 
-        const data = await response.json();
-
         if (!response.ok) {
+          const data = await response.json();
           throw new Error(data.error || data.message || '翻译失败');
         }
 
-        setOutputText(data.translation);
-        setIsTranslating(false);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = JSON.parse(line.slice(6));
+
+            if (data.error) {
+              throw new Error(data.error);
+            }
+            if (data.message) {
+              setProgressMessage(data.message);
+              setProgressLogs((prev) => [...prev.slice(-5), data.message]);
+            }
+            if (typeof data.chunkIndex === 'number' && typeof data.totalChunks === 'number') {
+              const nextPercent = Math.round(((data.chunkIndex + 1) / data.totalChunks) * 100);
+              setProgressPercent(nextPercent);
+            }
+            if (data.chunk) {
+              setOutputText((prev) => prev + data.chunk);
+            }
+            if (data.done) {
+              setProgressMessage('翻译完成');
+              setProgressPercent(100);
+              if (data.translation) {
+                setOutputText(data.translation);
+              }
+              setTranslationMeta({
+                transport: data.transport,
+                fileId: data.fileId,
+              });
+            }
+          }
+        }
         return;
       }
 
@@ -166,6 +214,7 @@ export default function TranslatePage() {
       }
     } catch (err) {
       setError(err.message);
+      setProgressMessage('翻译失败');
     } finally {
       setIsTranslating(false);
     }
@@ -182,10 +231,15 @@ export default function TranslatePage() {
     setInputText('');
     setOutputText('');
     setError('');
-    setPdfFile(null);
     setPdfName('');
+    setPdfBase64('');
     setExtractedText('');
     setPdfTotalPages(0);
+    setPdfPages([]);
+    setTranslationMeta(null);
+    setProgressMessage('');
+    setProgressPercent(0);
+    setProgressLogs([]);
   };
 
   // 复制结果
@@ -213,10 +267,7 @@ export default function TranslatePage() {
         const base64 = event.target.result;
 
         try {
-          // 选择 API：增强版或普通版
-          const apiEndpoint = useAdvancedPdf ? '/api/upload-pdf-advanced' : '/api/upload-pdf';
-          
-          const response = await fetch(apiEndpoint, {
+          const response = await fetch('/api/upload-pdf-advanced', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -231,11 +282,11 @@ export default function TranslatePage() {
             throw new Error(data.error || data.message || 'PDF 解析失败');
           }
 
-          setPdfFile(data);
           setPdfBase64(base64); // 存储原始 PDF base64
           setExtractedText(data.text);
           setInputText(data.text);
           setPdfTotalPages(data.totalPages);
+          setPdfPages(data.pages || []);
         } catch (err) {
           setError(err.message);
         } finally {
@@ -264,15 +315,18 @@ export default function TranslatePage() {
       let data;
 
       if (exportFormat === 'pdf') {
-        // PDF 导出（支持中文）
-        response = await fetch('/api/export-pdf-better', {
+        // PDF 覆盖导出（保留原排版）
+        response = await fetch('/api/export-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             originalText: inputText,
             translatedText: outputText,
             filename: pdfName || 'translation',
-            mode: 'bilingual',
+            sourceLang,
+            targetLang,
+            mode,
+            pdfBase64,
           }),
         });
       } else {
@@ -303,7 +357,7 @@ export default function TranslatePage() {
       link.download = data.filename;
       link.click();
 
-      alert(`✅ 已导出：${data.filename}`);
+      alert(`✅ 已导出：${data.filename}${data.pages ? ` (${data.pages}页)` : ''}`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -327,12 +381,6 @@ export default function TranslatePage() {
   };
 
   return (
-    <>
-      <Head>
-        <title>论文翻译 - Paper Assistant</title>
-        <meta name="description" content="专业学术论文翻译工具" />
-      </Head>
-
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
         <div className="max-w-7xl mx-auto">
           {/* 标题 */}
@@ -480,18 +528,17 @@ export default function TranslatePage() {
                         ? 'bg-red-600 text-white border-red-600'
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                     }`}
-                    title="PDF 导出（保留原排版）"
-                    disabled={!pdfBase64}
+                    title="PDF 覆盖导出（保留原排版）"
                   >
-                    📕 PDF {!pdfBase64 && '(需先上传 PDF)'}
+                    📕 PDF
                   </button>
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleTranslate}
-                    disabled={isTranslating || (!inputText.trim() && !directPdfMode)}
+                    disabled={isTranslating || (!inputText.trim() && !pdfBase64)}
                     className={`flex-1 px-4 py-2 rounded-lg font-medium transition-all ${
-                      isTranslating || (!inputText.trim() && !directPdfMode)
+                      isTranslating || (!inputText.trim() && !pdfBase64)
                         ? 'bg-gray-300 cursor-not-allowed'
                         : 'bg-blue-600 text-white hover:bg-blue-700'
                     }`}
@@ -541,24 +588,46 @@ export default function TranslatePage() {
                 />
                 <span className="text-sm text-gray-600">流式输出（实时显示）</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={directPdfMode}
-                  onChange={(e) => setDirectPdfMode(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm text-gray-600">🚀 直接上传 PDF 给火山方舟（推荐）✨</span>
-              </label>
+              <span className="text-sm text-gray-600">
+                PDF 论文模式优先使用原始 PDF 直连火山方舟，失败时自动回退到文本直出
+              </span>
+              {translationMeta?.transport && (
+                <span className="text-sm text-emerald-700">
+                  当前结果使用 {translationMeta.transport === 'ark-file' ? '原始 PDF 直连模式' : '文本直出回退模式'} 完成
+                </span>
+              )}
             </div>
+            {(isTranslating || progressMessage) && (
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="text-blue-900">{progressMessage || '处理中...'}</span>
+                  <span className="text-blue-700">{progressPercent}%</span>
+                </div>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-blue-100">
+                  <div
+                    className="h-full rounded-full bg-blue-600 transition-all"
+                    style={{ width: `${Math.max(progressPercent, 6)}%` }}
+                  />
+                </div>
+                {!!progressLogs.length && (
+                  <div className="mt-3 space-y-1 text-xs text-blue-800">
+                    {progressLogs.map((log, index) => (
+                      <div key={`${log}-${index}`}>{log}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 翻译区域 */}
           {showBilingual ? (
             /* 双语对照模式 */
             <div className="bg-white rounded-xl shadow-lg p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-semibold text-gray-800">📖 双语对照预览</h2>
+              <div className="flex justify-between items-center mb-4 gap-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold text-gray-800">📖 双语对照预览</h2>
+                </div>
                 <button
                   onClick={() => setShowBilingual(false)}
                   className="text-sm text-gray-600 hover:text-gray-800"
@@ -568,12 +637,12 @@ export default function TranslatePage() {
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px] overflow-hidden">
                 <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-blue-50">
-                  <h3 className="font-semibold text-gray-700 mb-3 sticky top-0 bg-blue-50">📝 原文</h3>
-                  <div className="font-mono text-sm whitespace-pre-wrap">{inputText}</div>
+                  <h3 className="font-semibold text-blue-900 mb-3 sticky top-0 bg-blue-50">📝 原文</h3>
+                  <pre className="text-sm leading-7 text-gray-800 whitespace-pre-wrap font-sans">{inputText || ' '}</pre>
                 </div>
                 <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-green-50">
-                  <h3 className="font-semibold text-gray-700 mb-3 sticky top-0 bg-green-50">🌐 译文</h3>
-                  <div className="font-mono text-sm whitespace-pre-wrap">{outputText}</div>
+                  <h3 className="font-semibold text-green-900 mb-3 sticky top-0 bg-green-50">🌐 译文</h3>
+                  <pre className="text-sm leading-7 text-gray-800 whitespace-pre-wrap font-sans">{outputText || ' '}</pre>
                 </div>
               </div>
             </div>
@@ -638,9 +707,11 @@ export default function TranslatePage() {
                 </div>
                 <div
                   ref={outputRef}
-                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg overflow-auto bg-gray-50 font-mono text-sm whitespace-pre-wrap"
+                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg overflow-auto bg-gray-50 text-sm"
                 >
-                  {outputText || (
+                  {outputText ? (
+                    <pre className="leading-7 text-gray-800 whitespace-pre-wrap font-sans">{outputText}</pre>
+                  ) : (
                     <span className="text-gray-400">翻译结果将显示在这里...</span>
                   )}
                 </div>
@@ -680,7 +751,7 @@ export default function TranslatePage() {
               <div className="p-4 bg-orange-50 rounded-lg">
                 <h4 className="font-medium text-orange-800 mb-2">📄 PDF 上传</h4>
                 <p className="text-sm text-orange-700">
-                  直接上传 PDF 论文，自动提取文本进行翻译
+                  优先使用原始 PDF 直连模型，失败时自动回退到文本模式
                 </p>
               </div>
               <div className="p-4 bg-red-50 rounded-lg">
@@ -699,6 +770,5 @@ export default function TranslatePage() {
           </div>
         </div>
       </div>
-    </>
   );
 }

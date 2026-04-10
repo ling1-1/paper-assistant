@@ -1,16 +1,138 @@
-// pages/api/export-pdf-overlay.js — PDF 覆盖导出（保留原排版）
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { writeFile, mkdir } from 'fs/promises';
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from 'fontkit';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { normalizeParagraphs } from '../../lib/translationPipeline';
+
+const CHINESE_FONT_PATH = '/Library/Fonts/Arial Unicode.ttf';
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '10mb',
+      sizeLimit: '20mb',
     },
   },
 };
+
+function partitionParagraphs(paragraphs, totalGroups) {
+  if (!paragraphs.length) {
+    return Array.from({ length: totalGroups }, () => []);
+  }
+
+  const groups = Array.from({ length: totalGroups }, () => []);
+  const totalChars = paragraphs.reduce((sum, paragraph) => sum + paragraph.length, 0);
+  const targetChars = Math.max(Math.ceil(totalChars / totalGroups), 1);
+  let groupIndex = 0;
+  let currentChars = 0;
+
+  for (const paragraph of paragraphs) {
+    if (groupIndex < totalGroups - 1 && currentChars >= targetChars) {
+      groupIndex += 1;
+      currentChars = 0;
+    }
+    groups[groupIndex].push(paragraph);
+    currentChars += paragraph.length;
+  }
+
+  return groups;
+}
+
+function wrapLine(font, text, fontSize, maxWidth) {
+  if (!text) {
+    return [''];
+  }
+
+  const lines = [];
+  let current = '';
+
+  for (const char of text) {
+    const candidate = current + char;
+    if (current && font.widthOfTextAtSize(candidate, fontSize) > maxWidth) {
+      lines.push(current);
+      current = char;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines;
+}
+
+function drawTranslationPage({ page, font, pageNumber, paragraphs, originalFilename }) {
+  const { width, height } = page.getSize();
+  const marginX = 48;
+  const topY = height - 56;
+  const contentWidth = width - marginX * 2;
+  const bodyFontSize = 11;
+  const lineHeight = 18;
+  let cursorY = topY;
+
+  page.drawRectangle({
+    x: 0,
+    y: 0,
+    width,
+    height,
+    color: rgb(0.985, 0.99, 1),
+  });
+
+  page.drawText('Paper Assistant 双语译文页', {
+    x: marginX,
+    y: cursorY,
+    size: 18,
+    font,
+    color: rgb(0.08, 0.2, 0.5),
+  });
+  cursorY -= 26;
+
+  page.drawText(`原文文件: ${originalFilename}`, {
+    x: marginX,
+    y: cursorY,
+    size: 10,
+    font,
+    color: rgb(0.35, 0.4, 0.48),
+  });
+  cursorY -= 18;
+
+  page.drawText(`对应原 PDF 第 ${pageNumber} 页`, {
+    x: marginX,
+    y: cursorY,
+    size: 10,
+    font,
+    color: rgb(0.35, 0.4, 0.48),
+  });
+  cursorY -= 28;
+
+  for (const paragraph of paragraphs) {
+    const wrappedLines = wrapLine(font, paragraph, bodyFontSize, contentWidth);
+    for (const line of wrappedLines) {
+      if (cursorY < 52) {
+        page.drawText('...... 当前页空间不足，请查看后续译文页。', {
+          x: marginX,
+          y: 36,
+          size: 10,
+          font,
+          color: rgb(0.65, 0.1, 0.1),
+        });
+        return;
+      }
+
+      page.drawText(line, {
+        x: marginX,
+        y: cursorY,
+        size: bodyFontSize,
+        font,
+        color: rgb(0.1, 0.12, 0.18),
+      });
+      cursorY -= lineHeight;
+    }
+    cursorY -= 10;
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -33,133 +155,54 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: '未提供翻译文本' });
     }
 
-    // 解析原始 PDF（处理 base64 或纯 base64 数据）
-    let pdfBuffer;
-    if (originalPdfBase64.startsWith('data:')) {
-      pdfBuffer = Buffer.from(originalPdfBase64.split(',')[1], 'base64');
-    } else {
-      pdfBuffer = Buffer.from(originalPdfBase64, 'base64');
-    }
-    const uint8Array = new Uint8Array(pdfBuffer);
+    const pureBase64 = originalPdfBase64.startsWith('data:')
+      ? originalPdfBase64.split(',')[1]
+      : originalPdfBase64;
+    const originalBytes = Buffer.from(pureBase64, 'base64');
 
-    // 使用 pdf-lib 加载 PDF
-    const pdfDoc = await PDFDocument.load(uint8Array);
-    const pages = pdfDoc.getPages();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const originalPdf = await PDFDocument.load(originalBytes);
+    const exportPdf = await PDFDocument.create();
+    exportPdf.registerFontkit(fontkit);
 
-    // 简单策略：在每页底部添加翻译文本
-    const charsPerPage = 500; // 每页约 500 字符
-    const textPages = [];
-    for (let i = 0; i < translatedText.length; i += charsPerPage) {
-      textPages.push(translatedText.slice(i, i + charsPerPage));
-    }
+    const fontBytes = await readFile(CHINESE_FONT_PATH);
+    const bodyFont = await exportPdf.embedFont(fontBytes, { subset: true });
 
-    // 在每页添加翻译文本
-    for (let i = 0; i < Math.min(textPages.length, pages.length); i++) {
-      const page = pages[i];
-      const { height } = page.getSize();
-      const text = textPages[i];
-      
-      const lines = text.split('\n').filter(line => line.trim());
-      const lineHeight = 12;
-      const startY = height - 150; // 从页面 150px 处开始
-      
-      // 绘制背景
-      page.drawRectangle({
-        x: 50,
-        y: startY - lines.length * lineHeight - 20,
-        width: 500,
-        height: lines.length * lineHeight + 40,
-        color: rgb(0.95, 0.95, 1.0), // 浅蓝色背景
-        opacity: 0.8,
+    const sourcePageIndices = originalPdf.getPages().map((_, index) => index);
+    const copiedPages = await exportPdf.copyPages(originalPdf, sourcePageIndices);
+    const paragraphGroups = partitionParagraphs(normalizeParagraphs(translatedText), copiedPages.length);
+
+    copiedPages.forEach((copiedPage, index) => {
+      exportPdf.addPage(copiedPage);
+      const translationPage = exportPdf.addPage([copiedPage.getWidth(), copiedPage.getHeight()]);
+      drawTranslationPage({
+        page: translationPage,
+        font: bodyFont,
+        pageNumber: index + 1,
+        paragraphs: paragraphGroups[index] || [],
+        originalFilename,
       });
+    });
 
-      // 添加翻译文本
-      let y = startY;
-      lines.forEach((line) => {
-        if (line.trim()) {
-          page.drawText(line, {
-            x: 60,
-            y,
-            size: 10,
-            font,
-            color: rgb(0, 0, 0.5), // 深蓝色文字
-            maxWidth: 480,
-          });
-          y -= lineHeight;
-        }
-      });
-
-      // 添加标注
-      page.drawText('[翻译]', {
-        x: 500,
-        y: startY,
-        size: 8,
-        font,
-        color: rgb(0.5, 0.5, 0.5),
-      });
-    }
-
-    // 如果翻译文本超过原 PDF 页数，添加新页面
-    for (let i = pages.length; i < textPages.length; i++) {
-      const newPage = pdfDoc.addPage([595, 842]); // A4 尺寸
-      const { height } = newPage.getSize();
-      const text = textPages[i];
-      
-      const lines = text.split('\n').filter(line => line.trim());
-      const lineHeight = 12;
-      const startY = height - 100;
-      
-      newPage.drawRectangle({
-        x: 50,
-        y: startY - lines.length * lineHeight - 20,
-        width: 500,
-        height: lines.length * lineHeight + 40,
-        color: rgb(0.95, 0.95, 1.0),
-        opacity: 0.8,
-      });
-
-      let y = startY;
-      lines.forEach((line) => {
-        if (line.trim()) {
-          newPage.drawText(line, {
-            x: 60,
-            y,
-            size: 10,
-            font,
-            color: rgb(0, 0, 0.5),
-            maxWidth: 480,
-          });
-          y -= lineHeight;
-        }
-      });
-    }
-
-    // 保存 PDF
-    const pdfBytes = await pdfDoc.save();
+    const pdfBytes = await exportPdf.save();
     const buffer = Buffer.from(pdfBytes);
 
-    // 确保上传目录存在
     const uploadDir = join(process.cwd(), 'uploads');
     if (!existsSync(uploadDir)) {
       await mkdir(uploadDir, { recursive: true });
     }
 
-    // 保存文件
-    const safeFilename = `${Date.now()}-${filename.replace('.pdf', '')}-overlay.pdf`;
+    const safeFilename = `${Date.now()}-${filename.replace('.pdf', '')}-bilingual.pdf`;
     const filepath = join(uploadDir, safeFilename);
     await writeFile(filepath, buffer);
 
-    // 返回 base64
-    const base64 = buffer.toString('base64');
-    const downloadUrl = `data:application/pdf;base64,${base64}`;
+    const downloadUrl = `data:application/pdf;base64,${buffer.toString('base64')}`;
 
     return res.status(200).json({
       success: true,
       filename: safeFilename,
       downloadUrl,
       filepath,
-      totalPages: pdfDoc.getPageCount(),
+      totalPages: exportPdf.getPageCount(),
     });
   } catch (err) {
     console.error('[export-pdf-overlay]', err);

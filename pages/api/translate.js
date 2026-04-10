@@ -1,5 +1,6 @@
 // pages/api/translate.js — 论文翻译接口
 import { callAIStream, callAI } from '../../lib/aiCaller';
+import { translateLongText } from '../../lib/translationPipeline';
 
 export const config = { api: { bodyParser: true } };
 
@@ -79,6 +80,51 @@ export default async function handler(req, res) {
   const messages = [{ role: 'user', content: text }];
 
   try {
+    if (mode === 'translate') {
+      if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+
+        let fullTranslation = '';
+        try {
+          fullTranslation = await translateLongText({
+            text,
+            sourceLang,
+            targetLang,
+            field,
+            translateChunk: async (chunkPrompt) => callAI([{ role: 'user', content: chunkPrompt }], systemPrompt, model),
+            onChunk: (chunk, chunkIndex, totalChunks) => {
+              res.write(`data: ${JSON.stringify({ chunk, chunkIndex, totalChunks, type: 'translation' })}\n\n`);
+              if (chunkIndex < totalChunks - 1) {
+                res.write(`data: ${JSON.stringify({ chunk: '\n\n', type: 'separator' })}\n\n`);
+              }
+            },
+          });
+        } catch (err) {
+          res.write(`data: ${JSON.stringify({ error: err.message, type: 'error' })}\n\n`);
+          res.end();
+          return;
+        }
+
+        res.write(`data: ${JSON.stringify({ done: true, translation: fullTranslation })}\n\n`);
+        res.end();
+        return;
+      }
+
+      const translation = await translateLongText({
+        text,
+        sourceLang,
+        targetLang,
+        field,
+        translateChunk: async (chunkPrompt) => callAI([{ role: 'user', content: chunkPrompt }], systemPrompt, model),
+      });
+
+      return res.status(200).json({ translation, mode, sourceLang, targetLang });
+    }
+
     if (stream) {
       // 流式输出（SSE）
       res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -101,11 +147,12 @@ export default async function handler(req, res) {
 
       res.write(`data: ${JSON.stringify({ done: true, translation: fullTranslation })}\n\n`);
       res.end();
-    } else {
-      // 非流式输出
-      const translation = await callAI(messages, systemPrompt, model);
-      return res.status(200).json({ translation, mode, sourceLang, targetLang });
+      return;
     }
+
+    // 非流式输出
+    const translation = await callAI(messages, systemPrompt, model);
+    return res.status(200).json({ translation, mode, sourceLang, targetLang });
   } catch (err) {
     console.error('[translate]', err);
     return res.status(500).json({ error: err.message });
