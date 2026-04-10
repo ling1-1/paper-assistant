@@ -1,4 +1,6 @@
 import { callAI, callAIStream } from '../../lib/aiCaller';
+import { extractOutputText } from '../../lib/arkFileApi';
+import FormData from 'form-data';
 
 export const config = {
   api: {
@@ -9,6 +11,7 @@ export const config = {
 };
 
 const ARK_BASE_URL = 'https://ark.cn-beijing.volces.com';
+const ARK_FILE_MODEL = process.env.VOLC_FILE_MODEL || 'doubao-seed-2-0-pro-260215';
 
 const DIRECT_PROMPT = `你是一位专业的学术论文翻译专家。请直接基于用户上传的论文 PDF 完成整篇翻译，并严格遵守以下要求：
 1. 仅输出译文正文，不要输出解释、总结、前言或额外说明。
@@ -47,19 +50,24 @@ async function parseJsonSafe(response) {
 
 async function uploadAssistantFile({ apiKey, buffer, filename }) {
   const formData = new FormData();
-  formData.append('purpose', 'assistants');
-  formData.append('file', new Blob([buffer], { type: 'application/pdf' }), filename || 'paper.pdf');
+  formData.append('purpose', 'user_data');
+  formData.append('file', buffer, {
+    filename: filename || 'paper.pdf',
+    contentType: 'application/pdf',
+  });
 
-  const response = await fetch(`${ARK_BASE_URL}/api/v1/files`, {
+  const response = await fetch(`${ARK_BASE_URL}/api/v3/files`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
+      ...formData.getHeaders(),
     },
     body: formData,
   });
 
   const data = await parseJsonSafe(response);
   if (!response.ok) {
+    console.error('[uploadAssistantFile] Error:', data);
     throw new Error(data.error?.message || data.message || `文件上传失败：${response.status}`);
   }
 
@@ -82,21 +90,26 @@ function extractChatText(data) {
 
 async function translateViaArkChat({ pdfBase64, filename }) {
   const apiKey = process.env.VOLC_API_KEY;
-  const model = process.env.VOLC_FILE_MODEL || 'doubao-seed-2-0-pro-260215';
+  const model = ARK_FILE_MODEL;
 
   if (!apiKey) {
     throw new Error('未配置 VOLC_API_KEY');
   }
 
+  console.log('[translate-direct] Uploading PDF to Ark...');
   const buffer = decodePdfBase64(pdfBase64);
   const uploaded = await uploadAssistantFile({ apiKey, buffer, filename });
+  console.log('[translate-direct] Upload result:', uploaded);
 
   const fileId = uploaded.id || uploaded.file_id;
   if (!fileId) {
     throw new Error('Ark 文件上传成功，但未返回 file_id');
   }
 
-  const response = await fetch(`${ARK_BASE_URL}/api/v3/chat/completions`, {
+  console.log('[translate-direct] File ID:', fileId, 'Model:', model);
+  
+  // 使用正确的 API 端点和消息格式
+  const response = await fetch(`${ARK_BASE_URL}/api/v3/responses`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -104,7 +117,7 @@ async function translateViaArkChat({ pdfBase64, filename }) {
     },
     body: JSON.stringify({
       model,
-      messages: [
+      input: [
         {
           role: 'user',
           content: [
@@ -113,7 +126,7 @@ async function translateViaArkChat({ pdfBase64, filename }) {
               text: DIRECT_PROMPT,
             },
             {
-              type: 'file_id',
+              type: 'input_file',
               file_id: fileId,
             },
           ],
@@ -123,11 +136,14 @@ async function translateViaArkChat({ pdfBase64, filename }) {
   });
 
   const data = await parseJsonSafe(response);
+  console.log('[translate-direct] Response:', data);
+  
   if (!response.ok) {
     throw new Error(data.error?.message || data.message || `文件翻译失败：${response.status}`);
   }
 
-  const translation = extractChatText(data);
+  // 提取 Responses API 的返回结果
+  const translation = extractOutputText(data);
   if (!translation) {
     throw new Error('Ark 已返回结果，但未提取到译文');
   }
@@ -141,95 +157,27 @@ async function translateViaArkChat({ pdfBase64, filename }) {
 
 async function streamTranslateViaArkChat({ pdfBase64, filename, onChunk }) {
   const apiKey = process.env.VOLC_API_KEY;
-  const model = process.env.VOLC_FILE_MODEL || 'doubao-seed-2-0-pro-260215';
+  const model = ARK_FILE_MODEL;
 
   if (!apiKey) {
     throw new Error('未配置 VOLC_API_KEY');
   }
 
+  console.log('[translate-direct stream] Uploading PDF to Ark...');
   const buffer = decodePdfBase64(pdfBase64);
   const uploaded = await uploadAssistantFile({ apiKey, buffer, filename });
+  console.log('[translate-direct stream] Upload result:', uploaded);
 
   const fileId = uploaded.id || uploaded.file_id;
   if (!fileId) {
     throw new Error('Ark 文件上传成功，但未返回 file_id');
   }
 
-  const response = await fetch(`${ARK_BASE_URL}/api/v3/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      stream: true,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: DIRECT_PROMPT,
-            },
-            {
-              type: 'file_id',
-              file_id: fileId,
-            },
-          ],
-        },
-      ],
-    }),
-  });
+  console.log('[translate-direct stream] File ID:', fileId, 'Model:', model);
 
-  if (!response.ok) {
-    const data = await parseJsonSafe(response);
-    throw new Error(data.error?.message || data.message || `文件翻译失败：${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bufferText = '';
-  let translation = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    bufferText += decoder.decode(value, { stream: true });
-    const lines = bufferText.split('\n');
-    bufferText = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) {
-        continue;
-      }
-      const raw = line.slice(6).trim();
-      if (raw === '[DONE]') {
-        continue;
-      }
-      try {
-        const event = JSON.parse(raw);
-        const chunk = event?.choices?.[0]?.delta?.content;
-        if (chunk) {
-          translation += chunk;
-          onChunk(chunk);
-        }
-      } catch {}
-    }
-  }
-
-  if (!translation.trim()) {
-    throw new Error('Ark 流式返回为空');
-  }
-
-  return {
-    translation,
-    fileId,
-    model,
-  };
+  // 使用 Responses API (不支持流式，先降级到文本直出)
+  // TODO: 等待火山方舟支持 Responses API 流式
+  throw new Error('Responses API 暂不支持流式，将自动回退到文本直出模式');
 }
 
 async function translateViaTextFallback({ extractedText, onChunk }) {
