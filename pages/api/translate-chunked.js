@@ -18,9 +18,9 @@ const TRANSLATE_PROMPT = `你是一位专业的学术论文翻译专家。请翻
 4. 输出语言为中文，风格正式、准确。`;
 
 /**
- * 将文本分割成块 (每块约 500 字符)
+ * 将文本分割成块 (每块约 1500 字符 - 优化速度)
  */
-function splitIntoChunks(text, maxChars = 500) {
+function splitIntoChunks(text, maxChars = 1500) {
   const paragraphs = text.split(/\n\n+/);
   const chunks = [];
   let currentChunk = '';
@@ -78,45 +78,52 @@ export default async function handler(req, res) {
     });
 
     let translatedText = '';
-    let currentChunk = 0;
+    let completedChunks = 0;
 
-    // 逐块翻译
-    for (const chunk of chunks) {
-      currentChunk += 1;
-      const progress = Math.round((currentChunk / totalChunks) * 100);
+    // 并行翻译（最多同时 3 块）
+    const BATCH_SIZE = 3;
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      const batch = chunks.slice(i, i + BATCH_SIZE);
+      const batchPromises = batch.map(async (chunk, batchIndex) => {
+        const chunkIndex = i + batchIndex;
+        const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
 
-      sendSSE(res, {
-        stage: 'chunk_start',
-        chunkIndex: currentChunk,
-        totalChunks,
-        progress,
-        message: `翻译第 ${currentChunk}/${totalChunks} 块`,
+        sendSSE(res, {
+          stage: 'chunk_start',
+          chunkIndex: chunkIndex + 1,
+          totalChunks,
+          progress,
+          message: `翻译第 ${chunkIndex + 1}/${totalChunks} 块`,
+        });
+
+        let chunkTranslation = '';
+        await callAIStream(
+          [{ role: 'user', content: chunk }],
+          `${TRANSLATE_PROMPT}\n\n学科领域：${field}`,
+          'doubao',
+          (text) => {
+            chunkTranslation += text;
+            sendSSE(res, {
+              stage: 'chunk_stream',
+              chunkIndex: chunkIndex + 1,
+              text: text,
+            });
+          },
+        );
+
+        completedChunks += 1;
+        sendSSE(res, {
+          stage: 'chunk_done',
+          chunkIndex: chunkIndex + 1,
+          progress: Math.round((completedChunks / totalChunks) * 100),
+          message: `第 ${chunkIndex + 1} 块完成`,
+        });
+
+        return chunkTranslation;
       });
 
-      // 翻译当前块
-      let chunkTranslation = '';
-      await callAIStream(
-        [{ role: 'user', content: chunk }],
-        `${TRANSLATE_PROMPT}\n\n学科领域：${field}`,
-        'doubao',
-        (text) => {
-          chunkTranslation += text;
-          sendSSE(res, {
-            stage: 'chunk_stream',
-            chunkIndex: currentChunk,
-            text: text,
-          });
-        },
-      );
-
-      translatedText += chunkTranslation + '\n\n';
-
-      sendSSE(res, {
-        stage: 'chunk_done',
-        chunkIndex: currentChunk,
-        progress,
-        message: `第 ${currentChunk} 块完成`,
-      });
+      const batchResults = await Promise.all(batchPromises);
+      translatedText += batchResults.join('\n\n') + '\n\n';
     }
 
     // 完成
