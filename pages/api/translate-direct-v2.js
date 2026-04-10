@@ -113,51 +113,29 @@ export default async function handler(req, res) {
       throw new Error(`火山 API 错误：${volcRes.status} - ${errorData}`);
     }
 
-    // 步骤 3: 流式接收译文
-    const reader = volcRes.body.getReader();
-    const decoder = new TextDecoder();
-    let bufferText = '';
-    let fullTranslation = '';
-    let lastProgress = 30;
+    // 步骤 3: 流式接收译文（使用 node-fetch 兼容方式）
+    const fullTranslation = '';
+    const lastProgress = 30;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      bufferText += decoder.decode(value, { stream: true });
-      const lines = bufferText.split('\n');
-      bufferText = lines.pop();
-
+    for await (const chunk of volcRes.body) {
+      const text = chunk.toString();
+      const lines = text.split('\n');
+      
       for (const line of lines) {
         if (line.startsWith('data: ') && line !== 'data: [DONE]') {
           try {
             const data = JSON.parse(line.slice(6));
-            const text = data.choices?.[0]?.delta?.content || '';
+            const content = data.choices?.[0]?.delta?.content || '';
             
-            if (text) {
-              fullTranslation += text;
-              
-              // 计算进度（根据接收的字符数估算）
-              const progress = Math.min(95, 30 + Math.round((fullTranslation.length / (fullText.length * 0.7)) * 65));
-              if (progress > lastProgress) {
-                lastProgress = progress;
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-                sendSSE({
-                  stage: 'streaming',
-                  progress,
-                  text,
-                  message: `翻译中... (${elapsed}秒)`,
-                });
-              } else {
-                sendSSE({
-                  stage: 'streaming',
-                  progress: lastProgress,
-                  text,
-                });
-              }
+            if (content) {
+              sendSSE({
+                stage: 'streaming',
+                progress: lastProgress,
+                text: content,
+              });
             }
           } catch (e) {
-            // Ignore parse errors
+            // Ignore
           }
         }
       }
