@@ -25,26 +25,49 @@ export default function TranslatePageV2() {
 
     setFile(selectedFile);
     setError('');
-    setStatusMessage('正在解析 PDF...');
+    setStatusMessage(`正在解析 PDF... (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+      // 读取文件为 base64
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const base64 = event.target.result;
+          console.log('[Upload] Starting PDF upload, size:', base64.length);
+          
+          const response = await fetch('/api/upload-pdf-advanced', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file: base64,
+              filename: selectedFile.name,
+            }),
+          });
 
-      const response = await fetch('/api/upload-pdf-advanced', {
-        method: 'POST',
-        body: formData,
-      });
+          console.log('[Upload] Response status:', response.status);
+          const data = await response.json();
+          console.log('[Upload] Response data:', data);
 
-      const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || data.error || 'PDF 解析失败');
+          }
 
-      if (!response.ok) {
-        throw new Error(data.message || 'PDF 解析失败');
-      }
-
-      setExtractedText(data.text);
-      setStatusMessage(`✅ 解析成功：${data.totalPages}页，${data.text.length}字符`);
+          setExtractedText(data.text);
+          setStatusMessage(`✅ 解析成功：${data.totalPages}页，${data.text.length}字符`);
+        } catch (err) {
+          console.error('[Upload] Error:', err);
+          setError(`❌ ${err.message}`);
+          setStatusMessage('');
+        }
+      };
+      reader.onerror = () => {
+        console.error('[Upload] FileReader error');
+        setError('❌ 文件读取失败');
+        setStatusMessage('');
+      };
+      reader.readAsDataURL(selectedFile);
     } catch (err) {
+      console.error('[Upload] Catch error:', err);
       setError(`❌ ${err.message}`);
       setStatusMessage('');
     }
