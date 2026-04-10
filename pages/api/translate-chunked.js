@@ -1,7 +1,7 @@
 // pages/api/translate-chunked.js - 分块翻译 API
 // 核心改进：分块翻译 + 实时进度 + 错误处理
 
-import { callAIStream } from '../../lib/aiCaller';
+import fetch from 'node-fetch';
 
 export const config = {
   api: {
@@ -94,19 +94,55 @@ export default async function handler(req, res) {
       });
 
       let chunkTranslation = '';
-      await callAIStream(
-        [{ role: 'user', content: chunk }],
-        `${TRANSLATE_PROMPT}\n\n学科领域：${field}`,
-        'doubao',
-        (text) => {
-          chunkTranslation += text;
-          sendSSE(res, {
-            stage: 'chunk_stream',
-            chunkIndex: i + 1,
-            text: text,
-          });
+      
+      // 直接调用火山方舟 API
+      const volcRes = await fetch('https://ark.cn-beijing.volces.com/api/v3/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.VOLC_API_KEY}`,
         },
-      );
+        body: JSON.stringify({
+          model: process.env.VOLC_MODEL || 'doubao-seed-2-0-pro-260215',
+          stream: true,
+          messages: [
+            { role: 'system', content: `${TRANSLATE_PROMPT}\n\n学科领域：${field}` },
+            { role: 'user', content: chunk }
+          ],
+        }),
+      });
+      
+      const reader = volcRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const data = JSON.parse(line.slice(6));
+              const text = data.choices?.[0]?.delta?.content || '';
+              if (text) {
+                chunkTranslation += text;
+                sendSSE(res, {
+                  stage: 'chunk_stream',
+                  chunkIndex: i + 1,
+                  text: text,
+                });
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+        }
+      }
 
       completedChunks += 1;
       translatedText += chunkTranslation + '\n\n';
