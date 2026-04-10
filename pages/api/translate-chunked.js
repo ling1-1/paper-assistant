@@ -80,50 +80,43 @@ export default async function handler(req, res) {
     let translatedText = '';
     let completedChunks = 0;
 
-    // 并行翻译（最多同时 3 块）
-    const BATCH_SIZE = 3;
-    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-      const batch = chunks.slice(i, i + BATCH_SIZE);
-      const batchPromises = batch.map(async (chunk, batchIndex) => {
-        const chunkIndex = i + batchIndex;
-        const progress = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+    // 串行翻译（稳定优先）
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const progress = Math.round(((i + 1) / totalChunks) * 100);
 
-        sendSSE(res, {
-          stage: 'chunk_start',
-          chunkIndex: chunkIndex + 1,
-          totalChunks,
-          progress,
-          message: `翻译第 ${chunkIndex + 1}/${totalChunks} 块`,
-        });
-
-        let chunkTranslation = '';
-        await callAIStream(
-          [{ role: 'user', content: chunk }],
-          `${TRANSLATE_PROMPT}\n\n学科领域：${field}`,
-          'doubao',
-          (text) => {
-            chunkTranslation += text;
-            sendSSE(res, {
-              stage: 'chunk_stream',
-              chunkIndex: chunkIndex + 1,
-              text: text,
-            });
-          },
-        );
-
-        completedChunks += 1;
-        sendSSE(res, {
-          stage: 'chunk_done',
-          chunkIndex: chunkIndex + 1,
-          progress: Math.round((completedChunks / totalChunks) * 100),
-          message: `第 ${chunkIndex + 1} 块完成`,
-        });
-
-        return chunkTranslation;
+      sendSSE(res, {
+        stage: 'chunk_start',
+        chunkIndex: i + 1,
+        totalChunks,
+        progress,
+        message: `翻译第 ${i + 1}/${totalChunks} 块`,
       });
 
-      const batchResults = await Promise.all(batchPromises);
-      translatedText += batchResults.join('\n\n') + '\n\n';
+      let chunkTranslation = '';
+      await callAIStream(
+        [{ role: 'user', content: chunk }],
+        `${TRANSLATE_PROMPT}\n\n学科领域：${field}`,
+        'doubao',
+        (text) => {
+          chunkTranslation += text;
+          sendSSE(res, {
+            stage: 'chunk_stream',
+            chunkIndex: i + 1,
+            text: text,
+          });
+        },
+      );
+
+      completedChunks += 1;
+      translatedText += chunkTranslation + '\n\n';
+
+      sendSSE(res, {
+        stage: 'chunk_done',
+        chunkIndex: i + 1,
+        progress,
+        message: `第 ${i + 1} 块完成`,
+      });
     }
 
     // 完成
