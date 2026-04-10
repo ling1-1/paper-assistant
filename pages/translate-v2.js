@@ -86,6 +86,7 @@ export default function TranslatePageV2() {
     setTranslatedText('');
     setError('');
     setProgress(0);
+    setStatusMessage('开始上传 PDF...');
 
     try {
       const response = await fetch('/api/translate-direct-v2', {
@@ -106,6 +107,7 @@ export default function TranslatePageV2() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let startTime = Date.now();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -125,10 +127,13 @@ export default function TranslatePageV2() {
               throw new Error(data.error);
             }
 
+            // 更新状态消息
             if (data.message) {
-              setStatusMessage(data.message);
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+              setStatusMessage(`${data.message} (${elapsed}秒)`);
             }
 
+            // 更新进度条
             if (data.progress !== undefined) {
               setProgress(data.progress);
             }
@@ -139,7 +144,8 @@ export default function TranslatePageV2() {
             }
 
             if (data.stage === 'done') {
-              setStatusMessage('✅ 翻译完成！（整篇翻译，保持上下文和专业术语）');
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+              setStatusMessage(`✅ 翻译完成！（整篇翻译，保持上下文和专业术语）- 耗时${elapsed}秒`);
               setProgress(100);
             }
           } catch (parseErr) {
