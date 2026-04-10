@@ -66,7 +66,18 @@ async function uploadPdfToArk({ apiKey, buffer, filename }) {
  * 使用火山方舟 Responses API 翻译 PDF
  * 直接上传 PDF 文件，保持完整上下文
  */
-async function translatePdfWithArk({ fileId, apiKey, model }) {
+async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' }) {
+  const fieldMap = {
+    chemistry: '化学化工',
+    medicine: '医学',
+    cs: '计算机科学',
+    engineering: '工程',
+    biology: '生物学',
+    general: '通用'
+  };
+  
+  const fieldName = fieldMap[field] || '通用';
+  
   const response = await fetch(`${ARK_BASE_URL}/api/v3/responses`, {
     method: 'POST',
     headers: {
@@ -84,7 +95,7 @@ async function translatePdfWithArk({ fileId, apiKey, model }) {
               text: `你是一位专业的学术论文翻译专家。请完整翻译这篇论文，要求：
 
 1. **保持上下文连贯** - 整篇论文作为一个整体翻译，确保前后术语一致
-2. **专业术语准确** - 使用${field === 'chemistry' ? '化学化工' : field === 'medicine' ? '医学' : field === 'cs' ? '计算机科学' : field === 'engineering' ? '工程' : field === 'biology' ? '生物学' : '通用'}领域的标准中文术语
+2. **专业术语准确** - 使用${fieldName}领域的标准中文术语
 3. **保留特殊内容** - LaTeX 公式、化学分子式、数学符号、引用编号、图表编号和单位必须保留原样
 4. **保持段落结构** - 原文的段落划分和层级结构要保持
 5. **学术风格** - 输出语言为正式、准确的学术中文
@@ -187,7 +198,7 @@ export default async function handler(req, res) {
       message: '正在翻译整篇论文（保持上下文和专业术语）...',
     });
 
-    const result = await translatePdfWithArk({ fileId, apiKey, model });
+    const result = await translatePdfWithArk({ fileId, apiKey, model, field });
 
     sendSSE({
       stage: 'extracting',
