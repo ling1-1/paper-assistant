@@ -389,7 +389,7 @@ export default function TranslatePage() {
               <svg className="w-8 h-8 text-white" viewBox="0 0 76 65" fill="currentColor">
                 <path d="M37.5274 0L75.0548 65H0L37.5274 0Z"/>
               </svg>
-              <h1 className="text-3xl font-bold tracking-tight">
+              <h1 className="text-xl font-semibold tracking-tight tracking-tight">
                 Paper Assistant
               </h1>
             </div>
@@ -622,7 +622,7 @@ export default function TranslatePage() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
               <div className="flex justify-between items-center mb-4 gap-4">
                 <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold text-zinc-300">📖 双语对照预览</h2>
+                  <h2 className="text-sm font-medium text-zinc-300">📖 双语对照预览</h2>
                 </div>
                 <button
                   onClick={() => setShowBilingual(false)}
@@ -648,7 +648,7 @@ export default function TranslatePage() {
               {/* 输入框 */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold text-zinc-300">
+                  <h2 className="text-sm font-medium text-zinc-300">
                     {getModeTitle()}
                   </h2>
                   <button
@@ -672,7 +672,7 @@ export default function TranslatePage() {
               {/* 输出框 */}
               <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold text-zinc-300">
+                  <h2 className="text-sm font-medium text-zinc-300">
                     {getOutputTitle()}
                   </h2>
                   <div className="flex gap-3">
@@ -722,7 +722,7 @@ export default function TranslatePage() {
 
           {/* 功能说明 */}
           <div className="mt-8 bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-zinc-300 mb-4">
+            <h3 className="text-sm font-medium text-zinc-300 mb-4">
               💡 功能说明
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

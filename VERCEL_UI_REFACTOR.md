@@ -22,6 +22,9 @@
 | **边框** | `border-gray-300/200` | `border-zinc-800` |
 | **按钮** | `bg-blue-600` 彩色 | `bg-white text-black` 黑白 |
 | **输入框** | 白底灰边 | 黑底锌边 |
+| **标题** | `text-4xl font-bold` | `text-xl font-semibold tracking-tight` |
+| **正文** | `text-sm/leading-7` | `text-sm/leading-6` |
+| **字间距** | 默认 | `tracking-tight` (紧凑) |
 | **整体感觉** | 明亮活泼 | 专业极简 |
 
 ---
@@ -39,11 +42,18 @@
 按钮：white (#ffffff) + hover:zinc-200
 ```
 
-### 2. 字体规则
-- 标题：`font-bold tracking-tight`
-- 正文：`text-sm font-medium`
-- 辅助：`text-xs text-zinc-400/500`
-- 代码：`font-mono`
+### 2. 排版规则 (Typography)
+
+| 元素 | 类名 | 说明 |
+|------|------|------|
+| **大标题** | `text-xl font-semibold tracking-tight` | 紧凑字间距 |
+| **中标题** | `text-sm font-medium` | 卡片标题 |
+| **小标题** | `text-xs font-medium` | 标签/分组 |
+| **正文** | `text-sm` | 默认大小 |
+| **辅助文字** | `text-xs text-zinc-400/500` | 次要信息 |
+| **代码/输入** | `font-mono` | 等宽字体 |
+| **行高** | `leading-6` | 紧凑行距 |
+| **字间距** | `tracking-tight` | 略微收紧 |
 
 ### 3. 组件样式
 - **圆角**: `rounded-md` / `rounded-lg` (中小圆角)
