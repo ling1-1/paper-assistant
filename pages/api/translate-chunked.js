@@ -21,8 +21,10 @@ const TRANSLATE_PROMPT = `你是一位专业的学术论文翻译专家。请翻
  * 将文本分割成块 (每块约 1500 字符 - 优化速度)
  */
 function splitIntoChunks(text, maxChars = 1500) {
-  const paragraphs = text.split(/\n\n+/);
   const chunks = [];
+  
+  // 先按段落分
+  const paragraphs = text.split(/\n\n+/);
   let currentChunk = '';
 
   for (const paragraph of paragraphs) {
@@ -35,7 +37,29 @@ function splitIntoChunks(text, maxChars = 1500) {
   }
 
   if (currentChunk) chunks.push(currentChunk);
-  return chunks;
+  
+  // 如果有超大块，强制分割
+  const finalChunks = [];
+  for (const chunk of chunks) {
+    if (chunk.length > maxChars * 2) {
+      // 按句子分割
+      const sentences = chunk.split(/(?<=[。！？.!?])\s*/);
+      let currentSubChunk = '';
+      for (const sentence of sentences) {
+        if (currentSubChunk.length + sentence.length <= maxChars) {
+          currentSubChunk += sentence;
+        } else {
+          if (currentSubChunk) finalChunks.push(currentSubChunk);
+          currentSubChunk = sentence;
+        }
+      }
+      if (currentSubChunk) finalChunks.push(currentSubChunk);
+    } else {
+      finalChunks.push(chunk);
+    }
+  }
+  
+  return finalChunks;
 }
 
 /**
@@ -65,8 +89,10 @@ export default async function handler(req, res) {
     res.flushHeaders?.();
 
     // 分割文本
-    const chunks = splitIntoChunks(text, 500);
+    const chunks = splitIntoChunks(text, 1500);
     const totalChunks = chunks.length;
+    
+    console.log(`[translate-chunked] 开始翻译，共${totalChunks}块，每块 1500 字符`);
 
     console.log(`[translate-chunked] 开始翻译，共${totalChunks}块`);
 
