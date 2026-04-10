@@ -63,7 +63,7 @@ async function uploadPdfToArk({ apiKey, buffer, filename }) {
 }
 
 /**
- * 使用火山方舟 Responses API 翻译 PDF
+ * 使用火山方舟 Chat Completions API 翻译 PDF
  * 直接上传 PDF 文件，保持完整上下文
  */
 async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' }) {
@@ -78,7 +78,7 @@ async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' })
   
   const fieldName = fieldMap[field] || '通用';
   
-  const response = await fetch(`${ARK_BASE_URL}/api/v3/responses`, {
+  const response = await fetch(`${ARK_BASE_URL}/api/v3/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -86,26 +86,32 @@ async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' })
     },
     body: JSON.stringify({
       model,
-      input: [
+      stream: false,
+      messages: [
+        {
+          role: 'system',
+          content: `你是一位专业的学术论文翻译专家。
+学科领域：${fieldName}
+要求：
+1. 保持上下文连贯，整篇论文作为一个整体翻译
+2. 专业术语准确，使用标准中文术语
+3. 保留 LaTeX 公式、化学分子式、数学符号、引用编号、图表编号和单位
+4. 保持段落结构
+5. 学术风格，正式准确
+6. 只输出译文正文，不要解释`,
+        },
         {
           role: 'user',
           content: [
             {
-              type: 'text_content',
-              text: `你是一位专业的学术论文翻译专家。请完整翻译这篇论文，要求：
-
-1. **保持上下文连贯** - 整篇论文作为一个整体翻译，确保前后术语一致
-2. **专业术语准确** - 使用${fieldName}领域的标准中文术语
-3. **保留特殊内容** - LaTeX 公式、化学分子式、数学符号、引用编号、图表编号和单位必须保留原样
-4. **保持段落结构** - 原文的段落划分和层级结构要保持
-5. **学术风格** - 输出语言为正式、准确的学术中文
-6. **不要解释** - 只输出译文正文，不要添加任何解释、总结或额外说明
-
-请直接输出完整的中文译文。`,
+              type: 'text',
+              text: '请翻译这篇论文，输出完整的中文译文。',
             },
             {
-              type: 'input_file',
-              file_id: fileId,
+              type: 'file_url',
+              file_url: {
+                url: `ark-file:${fileId}`,
+              },
             },
           ],
         },
@@ -123,22 +129,10 @@ async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' })
 }
 
 /**
- * 从 Responses API 响应中提取译文
+ * 从 Chat Completions API 响应中提取译文
  */
 function extractTranslation(data) {
-  const output = data.output || [];
-  const texts = [];
-
-  for (const item of output) {
-    if (!Array.isArray(item.content)) continue;
-    for (const contentItem of item.content) {
-      if (contentItem.type === 'output_text' && contentItem.text) {
-        texts.push(contentItem.text);
-      }
-    }
-  }
-
-  return texts.join('\n').trim();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 export default async function handler(req, res) {
