@@ -91,7 +91,7 @@ async function translatePdfWithArk({ fileId, apiKey, model, field = 'general' })
           role: 'user',
           content: [
             {
-              type: 'text',
+              type: 'text_content',
               text: `你是一位专业的学术论文翻译专家。请完整翻译这篇论文，要求：
 
 1. **保持上下文连贯** - 整篇论文作为一个整体翻译，确保前后术语一致
