@@ -619,26 +619,26 @@ export default function TranslatePage() {
           {/* 翻译区域 */}
           {showBilingual ? (
             /* 双语对照模式 */
-            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+            <div className="bg-white rounded-xl shadow-lg p-6">
               <div className="flex justify-between items-center mb-4 gap-4">
                 <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold text-zinc-300">📖 双语对照预览</h2>
+                  <h2 className="text-lg font-semibold text-gray-800">📖 双语对照预览</h2>
                 </div>
                 <button
                   onClick={() => setShowBilingual(false)}
-                  className="text-sm text-zinc-400 hover:text-zinc-300"
+                  className="text-sm text-gray-600 hover:text-gray-800"
                 >
                   返回普通视图
                 </button>
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px] overflow-hidden">
-                <div className="border border-zinc-800 rounded-lg p-4 overflow-auto bg-black">
-                  <h3 className="font-semibold text-zinc-300 mb-3 sticky top-0 bg-black">📝 原文</h3>
-                  <pre className="text-sm leading-7 text-zinc-300 whitespace-pre-wrap font-sans">{inputText || ' '}</pre>
+                <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-blue-50">
+                  <h3 className="font-semibold text-blue-900 mb-3 sticky top-0 bg-blue-50">📝 原文</h3>
+                  <pre className="text-sm leading-7 text-gray-800 whitespace-pre-wrap font-sans">{inputText || ' '}</pre>
                 </div>
-                <div className="border border-zinc-800 rounded-lg p-4 overflow-auto bg-black">
-                  <h3 className="font-semibold text-zinc-300 mb-3 sticky top-0 bg-black">🌐 译文</h3>
-                  <pre className="text-sm leading-7 text-zinc-300 whitespace-pre-wrap font-sans">{outputText || ' '}</pre>
+                <div className="border border-gray-200 rounded-lg p-4 overflow-auto bg-green-50">
+                  <h3 className="font-semibold text-green-900 mb-3 sticky top-0 bg-green-50">🌐 译文</h3>
+                  <pre className="text-sm leading-7 text-gray-800 whitespace-pre-wrap font-sans">{outputText || ' '}</pre>
                 </div>
               </div>
             </div>
@@ -646,14 +646,14 @@ export default function TranslatePage() {
             /* 普通模式 */
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* 输入框 */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+              <div className="bg-white rounded-xl shadow-lg p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold text-zinc-300">
+                  <h2 className="text-lg font-semibold text-gray-800">
                     {getModeTitle()}
                   </h2>
                   <button
                     onClick={handlePaste}
-                    className="text-sm text-blue-600 hover:text-zinc-300 transition-colors"
+                    className="text-sm text-blue-600 hover:text-blue-800 transition-colors"
                   >
                     📋 粘贴
                   </button>
@@ -662,17 +662,17 @@ export default function TranslatePage() {
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   placeholder={getModeHint()}
-                  className="w-full h-96 px-4 py-3 border border-zinc-800 rounded-lg resize-none focus:ring-2 focus:ring-white focus:border-transparent font-mono text-sm"
+                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
                 />
-                <div className="mt-2 text-sm text-zinc-500 text-right">
+                <div className="mt-2 text-sm text-gray-500 text-right">
                   {inputText.length} 字符
                 </div>
               </div>
 
               {/* 输出框 */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+              <div className="bg-white rounded-xl shadow-lg p-6">
                 <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-lg font-semibold text-zinc-300">
+                  <h2 className="text-lg font-semibold text-gray-800">
                     {getOutputTitle()}
                   </h2>
                   <div className="flex gap-3">
@@ -681,7 +681,7 @@ export default function TranslatePage() {
                       disabled={isExporting || !outputText}
                       className={`text-sm transition-colors ${
                         outputText
-                          ? 'text-purple-600 hover:text-zinc-300'
+                          ? 'text-purple-600 hover:text-purple-800'
                           : 'text-gray-400 cursor-not-allowed'
                       }`}
                       title="导出为 Word 文档"
@@ -693,7 +693,7 @@ export default function TranslatePage() {
                       disabled={!outputText}
                       className={`text-sm transition-colors ${
                         outputText
-                          ? 'text-blue-600 hover:text-zinc-300'
+                          ? 'text-blue-600 hover:text-blue-800'
                           : 'text-gray-400 cursor-not-allowed'
                       }`}
                     >
@@ -703,16 +703,16 @@ export default function TranslatePage() {
                 </div>
                 <div
                   ref={outputRef}
-                  className="w-full h-96 px-4 py-3 border border-zinc-800 rounded-lg overflow-auto bg-black text-sm"
+                  className="w-full h-96 px-4 py-3 border border-gray-300 rounded-lg overflow-auto bg-gray-50 text-sm"
                 >
                   {outputText ? (
-                    <pre className="leading-7 text-zinc-300 whitespace-pre-wrap font-sans">{outputText}</pre>
+                    <pre className="leading-7 text-gray-800 whitespace-pre-wrap font-sans">{outputText}</pre>
                   ) : (
                     <span className="text-gray-400">翻译结果将显示在这里...</span>
                   )}
                 </div>
                 {error && (
-                  <div className="mt-2 p-3 border-red-900/20 border border-red-200 rounded-lg text-zinc-400 text-sm">
+                  <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
                     ❌ {error}
                   </div>
                 )}
@@ -721,44 +721,44 @@ export default function TranslatePage() {
           )}
 
           {/* 功能说明 */}
-          <div className="mt-8 bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-zinc-300 mb-4">
+          <div className="mt-8 bg-white rounded-xl shadow-lg p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">
               💡 功能说明
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div className="p-4 bg-black rounded-lg">
-                <h4 className="font-medium text-zinc-300 mb-2">📝 翻译模式</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-blue-50 rounded-lg">
+                <h4 className="font-medium text-blue-800 mb-2">📝 翻译模式</h4>
+                <p className="text-sm text-blue-700">
                   专业学术论文翻译，保持术语准确性，支持中英互译
                 </p>
               </div>
-              <div className="p-4 bg-black rounded-lg">
-                <h4 className="font-medium text-zinc-300 mb-2">💡 术语解释</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-green-50 rounded-lg">
+                <h4 className="font-medium text-green-800 mb-2">💡 术语解释</h4>
+                <p className="text-sm text-green-700">
                   遇到不懂的专业术语？让 AI 为你详细解释
                 </p>
               </div>
-              <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-md">
-                <h4 className="font-medium text-zinc-300 mb-2">✨ 润色优化</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-purple-50 rounded-lg">
+                <h4 className="font-medium text-purple-800 mb-2">✨ 润色优化</h4>
+                <p className="text-sm text-purple-700">
                   优化表达，让论文更加学术化、规范化
                 </p>
               </div>
-              <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-md">
-                <h4 className="font-medium text-zinc-300 mb-2">📄 PDF 上传</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-orange-50 rounded-lg">
+                <h4 className="font-medium text-orange-800 mb-2">📄 PDF 上传</h4>
+                <p className="text-sm text-orange-700">
                   优先使用原始 PDF 直连模型，失败时自动回退到文本模式
                 </p>
               </div>
-              <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-md">
-                <h4 className="font-medium text-zinc-300 mb-2">📥 导出 Word</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-red-50 rounded-lg">
+                <h4 className="font-medium text-red-800 mb-2">📥 导出 Word</h4>
+                <p className="text-sm text-red-700">
                   翻译结果导出为 Word 文档，保留原文对照
                 </p>
               </div>
-              <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-md">
-                <h4 className="font-medium text-zinc-300 mb-2">🎯 学科领域</h4>
-                <p className="text-sm text-zinc-400">
+              <div className="p-4 bg-teal-50 rounded-lg">
+                <h4 className="font-medium text-teal-800 mb-2">🎯 学科领域</h4>
+                <p className="text-sm text-teal-700">
                   5 大学科领域，专业术语精准翻译
                 </p>
               </div>
