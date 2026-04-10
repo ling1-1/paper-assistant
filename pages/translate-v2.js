@@ -74,10 +74,10 @@ export default function TranslatePageV2() {
   };
 
   /**
-   * 处理翻译
+   * 处理翻译 - 直接上传 PDF 到火山方舟
    */
   const handleTranslate = async () => {
-    if (!extractedText) {
+    if (!pdfBase64) {
       setError('请先上传 PDF 文件');
       return;
     }
@@ -88,14 +88,13 @@ export default function TranslatePageV2() {
     setProgress(0);
 
     try {
-      const response = await fetch('/api/translate-chunked', {
+      const response = await fetch('/api/translate-direct-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: extractedText,
+          pdfBase64,
+          filename: file?.name || 'paper.pdf',
           field,
-          sourceLang: 'en',
-          targetLang: 'zh',
         }),
       });
 
@@ -134,12 +133,13 @@ export default function TranslatePageV2() {
               setProgress(data.progress);
             }
 
-            if (data.text) {
-              setTranslatedText((prev) => prev + data.text);
+            // 直接接收完整译文
+            if (data.translation) {
+              setTranslatedText(data.translation);
             }
 
             if (data.stage === 'done') {
-              setStatusMessage('✅ 翻译完成！');
+              setStatusMessage('✅ 翻译完成！（整篇翻译，保持上下文和专业术语）');
               setProgress(100);
             }
           } catch (parseErr) {
