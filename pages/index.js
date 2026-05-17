@@ -465,6 +465,7 @@ export default function HomePage() {
     setPdfText(item.originalText || '');
     setPdfPages(Array.from({ length: item.totalPages || 0 }, (_, index) => ({ pageNumber: index + 1, text: '' })));
     setTranslatedText(item.translatedText || '');
+    setShowBilingual(Boolean(item.originalText && !item.translatedText));
     setTranslationField(item.field || 'general');
     setSourceLang(item.sourceLang || 'en');
     setTargetLang(item.targetLang || 'zh');
@@ -1722,9 +1723,11 @@ function editModel(model) {
                 </header>
 
                 <div style={previewSurfaceStyle()}>
-                  {!hasTranslationOutput ? (
+                  {!hasTranslationOutput && pdfText.trim() ? (
+                    <PreviewBlock title="原文" content={pdfText} />
+                  ) : !hasTranslationOutput ? (
                     <div style={{ color: 'var(--text3)', lineHeight: 1.8 }}>
-                      上传并启动翻译后，预览内容会显示在这里。当前主面板强调结果本身，不再展示大段说明文案。
+                      上传并启动翻译后，预览内容会显示在这里。若从旧历史恢复但没有正文，请重新上传 PDF 生成完整记录。
                     </div>
                   ) : showBilingual ? (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 24 }}>
