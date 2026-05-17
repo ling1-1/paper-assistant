@@ -4,7 +4,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends fonts-noto-cjk \
+  && apt-get install -y --no-install-recommends fonts-noto-cjk fonts-droid-fallback \
   && rm -rf /var/lib/apt/lists/* \
   && corepack enable
 
