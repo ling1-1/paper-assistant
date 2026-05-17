@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizePreviewForDisplay, segmentPreviewBlocks } from '../lib/services/preview-format';
 
 const PRIMARY_VIEWS = [
-  { id: 'write', label: '写作', short: 'W' },
-  { id: 'literature', label: '文献', short: 'L' },
-  { id: 'translate', label: '翻译', short: 'T' },
-  { id: 'history', label: '历史', short: 'H' },
-  { id: 'settings', label: '设置', short: 'S' },
+  { id: 'write', label: '写作', short: '写' },
+  { id: 'literature', label: '文献', short: '文' },
+  { id: 'translate', label: '翻译', short: '翻' },
+  { id: 'history', label: '历史', short: '历' },
+  { id: 'settings', label: '设置', short: '设' },
 ];
 
 const BUILTIN_MODELS = [
