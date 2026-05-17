@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   normalizeParagraphs,
+  formatReferenceSection,
   splitReferenceSection,
   stripOrphanPlaceholders,
 } = require('../lib/translationPipeline');
@@ -32,4 +33,16 @@ test('stripOrphanPlaceholders removes model-created placeholder noise', () => {
     stripOrphanPlaceholders('文本 PAPRASSISTTOKEN_12_ 继续 \\text{PAPRASSISTTOKEN\\_13\\_}'),
     '文本 继续',
   );
+});
+
+test('formatReferenceSection normalizes references to stable numbered entries', () => {
+  const result = formatReferenceSection(`References
+G. Kriiss, Ann. Chem., 225, 1
+(1884).
+2. E. Corleis, Ann. Chem., 232, 244 (1886).`);
+
+  assert.equal(result, `参考文献
+
+1. G. Kriiss, Ann. Chem., 225, 1 (1884).
+2. E. Corleis, Ann. Chem., 232, 244 (1886).`);
 });

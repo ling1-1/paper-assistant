@@ -18,6 +18,16 @@ test('normalizePreviewForDisplay renders common chemistry indices readably', () 
   assert.equal(result, '一旦制备好，[NH₄]₂[MoO₂S₂]²⁻ 可与 [Et₄N]OH 反应。将 Na₂MoO₄·2H₂O 溶解。');
 });
 
+test('normalizePreviewForDisplay unwraps display equations without leaking latex containers', () => {
+  const result = normalizePreviewForDisplay(`\\[
+\\beginalgian*
+[NH_4]_2[MS_4] + 2[Et_4N]OH \\longrightarrow [Et_4N]_2[MS_4] + 2H_2O + 2NH_3 \\\\
+\\endalign*
+\\]`);
+
+  assert.equal(result, '[NH₄]₂[MS₄] + 2[Et₄N]OH → [Et₄N]₂[MS₄] + 2H₂O + 2NH₃');
+});
+
 test('segmentPreviewBlocks marks title and sections for paper-like rendering', () => {
   const blocks = segmentPreviewBlocks(`铵盐和四烷基铵硫代钼酸盐及硫代钨酸盐的合成与表征
 

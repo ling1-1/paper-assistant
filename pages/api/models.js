@@ -32,32 +32,44 @@ export default async function handler(req, res) {
       }
 
       if (action === 'test') {
-        const { modelId } = req.body || {};
+        const { modelId, capability = 'both' } = req.body || {};
         const config = await resolveModelConfig(modelId);
+        const shouldTestText = capability === 'both' || capability === 'text';
+        const shouldTestVision = capability === 'both' || capability === 'vision';
 
         let text = { success: false, skipped: false, message: '未测试文本能力' };
-        try {
-          const textResult = await callModel(
-            [{ role: 'user', content: '请只返回“模型可用”。' }],
-            '你是一个模型连通性测试器，只返回简短确认。',
-            modelId,
-          );
-          text = {
-            success: true,
-            skipped: false,
-            model: textResult.model,
-            message: (textResult.text || '模型可用').slice(0, 80),
-          };
-        } catch (error) {
-          text = {
-            success: false,
-            skipped: false,
-            message: error.message || '文本模型测试失败',
-          };
+        if (shouldTestText) {
+          try {
+            const textResult = await callModel(
+              [{ role: 'user', content: '请只返回“模型可用”。' }],
+              '你是一个模型连通性测试器，只返回简短确认。',
+              modelId,
+            );
+            text = {
+              success: true,
+              skipped: false,
+              model: textResult.model,
+              message: (textResult.text || '模型可用').slice(0, 80),
+            };
+          } catch (error) {
+            text = {
+              success: false,
+              skipped: false,
+              message: error.message || '文本模型测试失败',
+            };
+          }
+        } else {
+          text = { success: false, skipped: true, message: '本次未测试文本能力' };
         }
 
         let vision = { success: false, skipped: true, message: '未测试视觉能力' };
-        if (!config.supportsVision) {
+        if (!shouldTestVision) {
+          vision = {
+            success: false,
+            skipped: true,
+            message: '本次未测试视觉能力。',
+          };
+        } else if (!config.supportsVision) {
           vision = {
             success: false,
             skipped: true,

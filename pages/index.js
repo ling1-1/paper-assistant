@@ -355,11 +355,14 @@ export default function HomePage() {
   const [exportFormat, setExportFormat] = useState('docx');
   const [translationStatus, setTranslationStatus] = useState(INITIAL_TRANSLATION_STATUS);
   const [pdfHistory, setPdfHistory] = useState([]);
+  const [chatAttachments, setChatAttachments] = useState([]);
+  const [attachmentError, setAttachmentError] = useState('');
 
   const endRef = useRef(null);
   const textAreaRef = useRef(null);
   const abortRef = useRef(null);
   const fileInputRef = useRef(null);
+  const chatAttachmentInputRef = useRef(null);
 
   useEffect(() => {
     setMounted(true);
@@ -478,6 +481,31 @@ export default function HomePage() {
     });
   }, []);
 
+  const renamePdfHistoryItem = useCallback((item) => {
+    const nextName = window.prompt('重命名这条 PDF 处理记录', item.filename || '');
+    if (!nextName?.trim()) return;
+
+    setPdfHistory((current) => {
+      const next = current.map((entry) => (
+        entry.id === item.id
+          ? { ...entry, filename: nextName.trim(), updatedAt: new Date().toISOString() }
+          : entry
+      ));
+      writePdfHistory(next);
+      return next;
+    });
+  }, []);
+
+  const deletePdfHistoryItem = useCallback((item) => {
+    if (!window.confirm(`删除处理记录“${item.filename}”？`)) return;
+
+    setPdfHistory((current) => {
+      const next = current.filter((entry) => entry.id !== item.id);
+      writePdfHistory(next);
+      return next;
+    });
+  }, []);
+
   const loadConversations = useCallback(async () => {
     try {
       const response = await fetch('/api/conversations');
@@ -590,6 +618,81 @@ export default function HomePage() {
     event.target.style.height = `${Math.min(event.target.scrollHeight, 240)}px`;
   }
 
+  async function handleChatAttachmentSelect(event) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    setAttachmentError('');
+
+    try {
+      const prepared = [];
+      for (const file of files.slice(0, 4)) {
+        if (file.size > 8 * 1024 * 1024) {
+          throw new Error(`${file.name} 超过 8MB，暂不支持作为写作附件。`);
+        }
+
+        if (file.type.startsWith('image/')) {
+          prepared.push({
+            id: genId(),
+            kind: 'image',
+            name: file.name,
+            size: file.size,
+            dataUrl: await readFileAsDataUrl(file),
+          });
+          continue;
+        }
+
+        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const fileBase64 = await readFileAsDataUrl(file);
+          const response = await fetch('/api/pdf/parse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileBase64, filename: file.name }),
+          });
+          const { payload, rawText } = await readApiPayload(response);
+          if (!response.ok || !payload.success) {
+            throw new Error(formatApiError(response, payload, rawText, `${file.name} 解析失败`));
+          }
+          prepared.push({
+            id: genId(),
+            kind: 'document',
+            name: file.name,
+            size: file.size,
+            text: cleanPreviewText(payload.data?.text || '').slice(0, 12000),
+            meta: `${payload.data?.totalPages || 0} 页 PDF`,
+          });
+          continue;
+        }
+
+        if (file.type.startsWith('text/') || /\.(txt|md|csv)$/i.test(file.name)) {
+          prepared.push({
+            id: genId(),
+            kind: 'document',
+            name: file.name,
+            size: file.size,
+            text: (await file.text()).slice(0, 12000),
+            meta: '文本附件',
+          });
+          continue;
+        }
+
+        throw new Error(`${file.name} 暂不支持。当前支持图片、PDF、TXT/MD。`);
+      }
+
+      setChatAttachments((current) => [...current, ...prepared].slice(0, 6));
+    } catch (error) {
+      setAttachmentError(error.message);
+    } finally {
+      if (chatAttachmentInputRef.current) {
+        chatAttachmentInputRef.current.value = '';
+      }
+    }
+  }
+
+  function removeChatAttachment(id) {
+    setChatAttachments((current) => current.filter((item) => item.id !== id));
+  }
+
   function chooseAction(action) {
     setActiveIntent(action.intent);
     setAssistantMode(action.mode);
@@ -679,21 +782,23 @@ export default function HomePage() {
     }
   }
 
-  async function testModel(modelId) {
-    setModelTestingId(modelId);
+  async function testModel(modelId, capability = 'both') {
+    setModelTestingId(`${modelId}:${capability}`);
     setModelConfigMessage('');
     try {
       const response = await fetch('/api/models?action=test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelId }),
+        body: JSON.stringify({ modelId, capability }),
       });
       const { payload, rawText } = await readApiPayload(response);
       if (!response.ok) {
         throw new Error(formatApiError(response, payload, rawText, '模型测试失败'));
       }
 
-      const textMessage = payload.test?.text?.success
+      const textMessage = payload.test?.text?.skipped
+        ? `文本未测试：${payload.test?.text?.message || '本次未测试'}`
+        : payload.test?.text?.success
         ? `文本可用：${payload.test?.text?.message || '模型可用'}`
         : `文本不可用：${payload.test?.text?.message || '测试失败'}`;
       const visionMessage = payload.test?.vision?.skipped
@@ -702,7 +807,11 @@ export default function HomePage() {
           ? `视觉可用：${payload.test.vision.message}`
           : `视觉不可用：${payload.test?.vision?.message || '测试失败'}`;
 
-      setModelConfigMessage(`测试完成。${textMessage}；${visionMessage}`);
+      const independenceNote = payload.test?.text?.success && !payload.test?.vision?.success
+        ? '文本模型仍可用于写作、文献和文本翻译；视觉失败只影响图片页 PDF 翻译。'
+        : '';
+
+      setModelConfigMessage(`测试完成。${textMessage}；${visionMessage}${independenceNote ? `。${independenceNote}` : ''}`);
     } catch (error) {
       setModelConfigMessage(error.message);
     } finally {
@@ -768,7 +877,8 @@ function editModel(model) {
 
   async function sendMessage() {
     const text = input.trim();
-    if (!text || loading || !conversationId) return;
+    const attachmentSnapshot = chatAttachments;
+    if ((!text && attachmentSnapshot.length === 0) || loading || !conversationId) return;
 
     let modelForRequest = currentModel;
     if (!modelsLoaded || missingModelConfig) {
@@ -790,11 +900,16 @@ function editModel(model) {
 
     setInput('');
     setCharCount(0);
+    setChatAttachments([]);
+    setAttachmentError('');
     if (textAreaRef.current) {
       textAreaRef.current.style.height = 'auto';
     }
 
-    setMessages((current) => [...current, { role: 'user', content: text }]);
+    const visibleUserContent = attachmentSnapshot.length
+      ? `${text || '请处理附件'}\n\n附件：${attachmentSnapshot.map((item) => item.name).join('、')}`
+      : text;
+    setMessages((current) => [...current, { role: 'user', content: visibleUserContent }]);
     setLoading(true);
     setStreamingText('');
     abortRef.current = new AbortController();
@@ -806,6 +921,13 @@ function editModel(model) {
         signal: abortRef.current.signal,
         body: JSON.stringify({
           userMessage: text,
+          attachments: attachmentSnapshot.map((item) => ({
+            kind: item.kind,
+            name: item.name,
+            text: item.text || '',
+            dataUrl: item.dataUrl || '',
+            meta: item.meta || '',
+          })),
           conversationId,
           mode: assistantMode,
           intent: activeIntent,
@@ -1328,6 +1450,14 @@ function editModel(model) {
               </div>
 
               <div style={inputPanelStyle()}>
+                <input
+                  ref={chatAttachmentInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf,text/plain,text/markdown,.txt,.md,.csv"
+                  onChange={handleChatAttachmentSelect}
+                  style={{ display: 'none' }}
+                />
                 <textarea
                   ref={textAreaRef}
                   value={input}
@@ -1342,13 +1472,29 @@ function editModel(model) {
                   placeholder={currentAction?.placeholder || '输入论文题目、段落或修改要求。'}
                   style={editorTextareaStyle()}
                 />
+                {(chatAttachments.length > 0 || attachmentError) && (
+                  <div style={attachmentTrayStyle()}>
+                    {chatAttachments.map((item) => (
+                      <div key={item.id} style={attachmentChipStyle()}>
+                        <span>{item.kind === 'image' ? '图片' : '文件'} · {item.name}</span>
+                        <button type="button" onClick={() => removeChatAttachment(item.id)} style={plainTextButtonStyle()}>
+                          移除
+                        </button>
+                      </div>
+                    ))}
+                    {attachmentError && <span style={{ color: 'var(--danger)', fontSize: 12 }}>{attachmentError}</span>}
+                  </div>
+                )}
                 <div style={inputFooterStyle()}>
                   <div style={{ fontSize: 11, color: 'var(--text3)' }}>{charCount} 字符</div>
                   <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" onClick={() => chatAttachmentInputRef.current?.click()} style={secondaryButtonStyle()}>
+                      添加文件/图片
+                    </button>
                     {loading ? (
                       <button onClick={stopGeneration} style={secondaryButtonStyle()}>停止</button>
                     ) : (
-                      <button onClick={sendMessage} disabled={!input.trim()} style={primaryButtonStyle(Boolean(input.trim()))}>发送</button>
+                      <button onClick={sendMessage} disabled={!input.trim() && chatAttachments.length === 0} style={primaryButtonStyle(Boolean(input.trim() || chatAttachments.length))}>发送</button>
                     )}
                   </div>
                 </div>
@@ -1461,14 +1607,21 @@ function editModel(model) {
                   ) : (
                     <div style={{ display: 'grid', gap: 8 }}>
                       {pdfHistory.slice(0, 5).map((item) => (
-                        <button key={item.id} onClick={() => restorePdfHistoryItem(item)} style={pdfHistoryItemStyle()}>
-                          <span style={{ fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {item.filename}
-                          </span>
-                          <span style={{ fontSize: 11, color: 'var(--text3)' }}>
-                            {item.totalPages || '—'} 页 · {pdfHistoryTransportLabel(item.transport)} · {formatTimeLabel(item.updatedAt)}
-                          </span>
-                        </button>
+                        <div key={item.id} style={pdfHistoryItemStyle()}>
+                          <button onClick={() => restorePdfHistoryItem(item)} style={pdfHistoryLoadButtonStyle()}>
+                            <span style={{ fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {item.filename}
+                            </span>
+                            <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+                              {item.totalPages || '—'} 页 · {pdfHistoryTransportLabel(item.transport)} · {formatTimeLabel(item.updatedAt)}
+                            </span>
+                          </button>
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <button type="button" onClick={() => restorePdfHistoryItem(item)} style={plainTextButtonStyle()}>载入</button>
+                            <button type="button" onClick={() => renamePdfHistoryItem(item)} style={plainTextButtonStyle()}>重命名</button>
+                            <button type="button" onClick={() => deletePdfHistoryItem(item)} style={plainTextButtonStyle()}>删除</button>
+                          </div>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -1646,6 +1799,9 @@ function editModel(model) {
                           <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
                             文本模型：{item.textModel || '未填写'}{item.supportsVision ? ` · 视觉模型：${item.visionModel || '未填写'}` : ''}
                           </div>
+                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                            文本：{item.textConfigured || item.configured ? '可用' : '待配置'} · 视觉：{item.supportsVision ? (item.visionConfigured ? '可用' : '独立待配置') : '未启用'}
+                          </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                           <button onClick={() => setAssistantModel(item.id)} style={secondaryButtonStyle()}>
@@ -1654,8 +1810,16 @@ function editModel(model) {
                           <button onClick={() => chooseDefaultModel(item.id)} style={secondaryButtonStyle()}>
                             {defaultModelId === item.id ? '默认模型' : '设为默认'}
                           </button>
-                          <button onClick={() => testModel(item.id)} disabled={modelTestingId === item.id} style={secondaryButtonStyle()}>
-                            {modelTestingId === item.id ? '测试中…' : '测试模型'}
+                          <button onClick={() => testModel(item.id, 'text')} disabled={modelTestingId === `${item.id}:text`} style={secondaryButtonStyle()}>
+                            {modelTestingId === `${item.id}:text` ? '测试中…' : '测试文本'}
+                          </button>
+                          {item.supportsVision && (
+                            <button onClick={() => testModel(item.id, 'vision')} disabled={modelTestingId === `${item.id}:vision`} style={secondaryButtonStyle()}>
+                              {modelTestingId === `${item.id}:vision` ? '测试中…' : '测试视觉'}
+                            </button>
+                          )}
+                          <button onClick={() => testModel(item.id, 'both')} disabled={modelTestingId === `${item.id}:both`} style={secondaryButtonStyle()}>
+                            {modelTestingId === `${item.id}:both` ? '测试中…' : '测试全部'}
                           </button>
                           <button onClick={() => editModel(item)} style={secondaryButtonStyle()}>
                             修改配置
@@ -2284,6 +2448,30 @@ function inputFooterStyle() {
   };
 }
 
+function attachmentTrayStyle() {
+  return {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+    padding: '0 18px 12px',
+  };
+}
+
+function attachmentChipStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    maxWidth: '100%',
+    padding: '6px 8px',
+    borderRadius: 8,
+    border: '1px solid var(--border)',
+    background: 'var(--surface2)',
+    fontSize: 12,
+    color: 'var(--text2)',
+  };
+}
+
 function primaryButtonStyle(enabled) {
   return {
     padding: '10px 14px',
@@ -2446,13 +2634,25 @@ function subsectionTitleStyle() {
 function pdfHistoryItemStyle() {
   return {
     display: 'grid',
-    gap: 4,
+    gap: 8,
     textAlign: 'left',
     width: '100%',
     padding: '10px 12px',
     borderRadius: 8,
     border: '1px solid var(--border)',
     background: 'var(--surface)',
+  };
+}
+
+function pdfHistoryLoadButtonStyle() {
+  return {
+    display: 'grid',
+    gap: 4,
+    width: '100%',
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    textAlign: 'left',
   };
 }
 
