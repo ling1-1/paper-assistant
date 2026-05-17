@@ -8,15 +8,26 @@ node_modules/
 /out/
 
 # env files - 绝对不要提交！
+.env
 .env.local
 .env.*.local
+.env.test
+.env.development
+.env.production
 
 # database
+.data/
 *.db
 *.sqlite
+*.db-shm
+*.db-wal
 
 # misc
 .DS_Store
 *.pem
 npm-debug.log*
 uploads/
+coverage/
+test-results/
+*.bak
+*.pdf

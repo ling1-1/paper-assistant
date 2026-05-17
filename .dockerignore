@@ -1,0 +1,17 @@
+.git
+.next
+node_modules
+.data
+.env
+.env.*
+!.env.local.example
+chat_history.db*
+uploads
+exports
+*.log
+*.pdf
+*.pem
+__pycache__
+.pytest_cache
+.DS_Store
+coverage

@@ -17,9 +17,9 @@
 
 #### 必需配置
 ```bash
-# 火山方舟 API（已配置）
-VOLC_API_KEY=d78c3528-7a65-4746-a704-43660d80493d
-VOLC_MODEL=ep-20260309122322-xwfhv
+# 火山方舟 API
+VOLC_API_KEY=
+VOLC_MODEL=
 
 # 默认模型
 DEFAULT_MODEL=doubao
@@ -28,13 +28,13 @@ DEFAULT_MODEL=doubao
 #### 可选配置（根据需要添加）
 ```bash
 # Claude API（推荐，效果最好）
-ANTHROPIC_API_KEY=sk-ant-你的 Key
+ANTHROPIC_API_KEY=
 
 # DeepSeek API（国内可用，性价比高）
-DEEPSEEK_API_KEY=sk-你的 Key
+DEEPSEEK_API_KEY=
 
 # 通义千问 API
-DASHSCOPE_API_KEY=你的 Key
+DASHSCOPE_API_KEY=
 
 # Semantic Scholar API（文献检索增强，可选）
 SEMANTIC_SCHOLAR_API_KEY=
