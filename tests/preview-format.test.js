@@ -24,6 +24,12 @@ test('normalizePreviewForDisplay renders plain chemistry formulas without touchi
   assert.equal(result, 'MOFs 的催化 H₂ 析出活性较低。NH₂-MIL-125(Ti) 与 MoS₂/WO₃ 可形成 2D 1T-MoS₂。');
 });
 
+test('normalizePreviewForDisplay converts model-emitted html subscript tags', () => {
+  const result = normalizePreviewForDisplay('表1 | [Et<sub>4</sub>N]<sub>2</sub>[MoS<sub>4</sub>] | 470 |<br>NH<sub>4</sub><sup>+</sup>');
+
+  assert.equal(result, '表1 | [Et₄N]₂[MoS₄] | 470 |\nNH₄⁺');
+});
+
 test('normalizePreviewForDisplay unwraps display equations without leaking latex containers', () => {
   const result = normalizePreviewForDisplay(`\\[
 \\beginalgian*

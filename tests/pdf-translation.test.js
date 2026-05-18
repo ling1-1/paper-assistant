@@ -41,6 +41,12 @@ R. C. Burns, R. C. Burns, R. C. Burns, R. C. Burns, R. C. Burns, R. C. Burns, R.
   assert.equal(cleaned, '正常段落');
 });
 
+test('cleanVisionTranslationText normalizes html chemistry tags before preview', () => {
+  const cleaned = cleanVisionTranslationText('一旦制备好，[NH<sub>4</sub>]<sub>2</sub>[MoS<sub>4</sub>] 与 H<sub>2</sub>O 反应。<br>继续加热。');
+
+  assert.equal(cleaned, '一旦制备好，[NH₄]₂[MoS₄] 与 H₂O 反应。\n\n继续加热。');
+});
+
 test('preserveOriginalReferences replaces model-generated reference section', () => {
   const result = preserveOriginalReferences({
     translation: `正文译文
