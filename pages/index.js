@@ -1980,6 +1980,10 @@ function PreviewParagraph({ block }) {
     return <h2 style={previewTitleStyle()}>{block.text}</h2>;
   }
 
+  if (block.type === 'table') {
+    return <PreviewTable rows={block.rows} />;
+  }
+
   if (block.type === 'section') {
     return <h3 style={previewSectionStyle()}>{block.text}</h3>;
   }
@@ -1989,6 +1993,31 @@ function PreviewParagraph({ block }) {
   }
 
   return <p style={previewParagraphStyle()}>{block.text}</p>;
+}
+
+function PreviewTable({ rows = [] }) {
+  if (!rows.length) return null;
+
+  return (
+    <div style={previewTableWrapStyle()}>
+      <table style={previewTableStyle()}>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              {row.map((cell, cellIndex) => {
+                const Cell = rowIndex === 0 ? 'th' : 'td';
+                return (
+                  <Cell key={`${rowIndex}-${cellIndex}`} style={previewTableCellStyle(rowIndex === 0)}>
+                    {cell}
+                  </Cell>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function SettingsSection({ title, children }) {
@@ -2766,6 +2795,39 @@ function previewParagraphStyle() {
   return {
     margin: '0 0 16px',
     textAlign: 'justify',
+    wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
+  };
+}
+
+function previewTableWrapStyle() {
+  return {
+    overflowX: 'auto',
+    margin: '12px 0 18px',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    background: '#fff',
+  };
+}
+
+function previewTableStyle() {
+  return {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: 13,
+    lineHeight: 1.65,
+  };
+}
+
+function previewTableCellStyle(header = false) {
+  return {
+    padding: '8px 10px',
+    borderBottom: '1px solid var(--border)',
+    borderRight: '1px solid var(--border)',
+    textAlign: 'left',
+    verticalAlign: 'top',
+    fontWeight: header ? 700 : 400,
+    background: header ? 'var(--surface2)' : '#fff',
     wordBreak: 'break-word',
     overflowWrap: 'anywhere',
   };

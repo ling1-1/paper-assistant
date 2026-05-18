@@ -30,6 +30,12 @@ test('normalizePreviewForDisplay converts model-emitted html subscript tags', ()
   assert.equal(result, '表1 | [Et₄N]₂[MoS₄] | 470 |\nNH₄⁺');
 });
 
+test('normalizePreviewForDisplay makes malformed frac formula readable', () => {
+  const result = normalizePreviewForDisplay('AQY(\\%) = \\frac2 × 生成的H₂分子数入射光子数 × 100\\%');
+
+  assert.equal(result, 'AQY(%) = (2 × 生成的H₂分子数 / 入射光子数) × 100%');
+});
+
 test('normalizePreviewForDisplay unwraps display equations without leaking latex containers', () => {
   const result = normalizePreviewForDisplay(`\\[
 \\beginalgian*
@@ -57,4 +63,20 @@ JOHN W. McDONALD、G. DELBERT FRIESEN
     blocks.map((block) => block.type),
     ['title', 'meta', 'section', 'paragraph', 'section', 'paragraph'],
   );
+});
+
+test('segmentPreviewBlocks groups markdown table rows', () => {
+  const blocks = segmentPreviewBlocks(`表1
+
+| 化合物 | 红外光谱 | UV/可见光谱 |
+| --- | --- | --- |
+| [Et4N]2[MoS4] | 470 | 467(11,850) |
+
+注：波数单位为 cm^-1。`);
+
+  assert.equal(blocks[1].type, 'table');
+  assert.deepEqual(blocks[1].rows, [
+    ['化合物', '红外光谱', 'UV/可见光谱'],
+    ['[Et₄N]₂[MoS₄]', '470', '467(11,850)'],
+  ]);
 });
