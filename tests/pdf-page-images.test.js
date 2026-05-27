@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   decodePdfBase64ToPdfjsData,
+  getRenderPageNumbers,
   loadCanvasModule,
   WASM_URL,
 } = require('../lib/services/pdf-page-images');
@@ -24,4 +25,9 @@ test('canvas renderer dependency is directly available to API runtime', () => {
 
 test('pdfjs wasm assets are configured for scanned PDF decoding', () => {
   assert.match(WASM_URL, /pdfjs-dist\/wasm\/$/);
+});
+
+test('getRenderPageNumbers supports partial local preview rendering', () => {
+  assert.deepEqual(getRenderPageNumbers(6, 2, true), [1, 2]);
+  assert.throws(() => getRenderPageNumbers(6, 2, false), /超过图片视觉翻译上限 2 页/);
 });

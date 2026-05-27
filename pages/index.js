@@ -348,6 +348,14 @@ export default function HomePage() {
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('zh');
   const [showBilingual, setShowBilingual] = useState(false);
+  const [translationPreviewMode, setTranslationPreviewMode] = useState('text');
+  const [overlayPages, setOverlayPages] = useState([]);
+  const [overlayPageIndex, setOverlayPageIndex] = useState(0);
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const [overlayLoading, setOverlayLoading] = useState(false);
+  const [overlayTranslating, setOverlayTranslating] = useState(false);
+  const [overlayStatus, setOverlayStatus] = useState('');
+  const [overlayPageLimit, setOverlayPageLimit] = useState('one');
   const [translationError, setTranslationError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -445,6 +453,8 @@ export default function HomePage() {
       status: item.status || 'parsed',
       translatedText: cleanPreviewText(item.translatedText || translatedText).slice(0, 80000),
       originalText: cleanPreviewText(item.originalText || pdfText).slice(0, 30000),
+      overlayPages: Array.isArray(item.overlayPages) ? item.overlayPages : [],
+      overlayStatus: item.overlayStatus || '',
       updatedAt: new Date().toISOString(),
     };
 
@@ -466,6 +476,10 @@ export default function HomePage() {
     setPdfPages(Array.from({ length: item.totalPages || 0 }, (_, index) => ({ pageNumber: index + 1, text: '' })));
     setTranslatedText(item.translatedText || '');
     setShowBilingual(Boolean(item.originalText && !item.translatedText));
+    setTranslationPreviewMode(item.overlayPages?.length ? 'overlay' : 'text');
+    setOverlayPages(item.overlayPages || []);
+    setOverlayPageIndex(0);
+    setOverlayStatus(item.overlayStatus || (item.overlayPages?.length ? '已从历史记录恢复原位对照' : ''));
     setTranslationField(item.field || 'general');
     setSourceLang(item.sourceLang || 'en');
     setTargetLang(item.targetLang || 'zh');
@@ -473,7 +487,7 @@ export default function HomePage() {
     setTranslationStatus({
       stage: item.status === 'done' ? 'done' : 'parsed',
       progress: item.status === 'done' ? 100 : 0,
-      message: item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录',
+      message: item.overlayPages?.length ? '已从历史记录恢复原位对照' : item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录',
       transport: item.transport || null,
       model: item.model || null,
       fallbackUsed: item.transport === 'text-fallback',
@@ -1047,6 +1061,10 @@ function editModel(model) {
     setIsUploading(true);
     setTranslationError('');
     setTranslatedText('');
+    setTranslationPreviewMode('text');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setOverlayStatus('');
     setTranslationStatus({
       stage: 'parsing',
       progress: 5,
@@ -1215,6 +1233,121 @@ function editModel(model) {
     }
   }
 
+  async function handleGenerateOverlay() {
+    if (!pdfBase64) {
+      setTranslationError('请先上传 PDF');
+      return;
+    }
+
+    setTranslationPreviewMode('overlay');
+    setOverlayLoading(true);
+    setOverlayTranslating(false);
+    setOverlayStatus('正在识别页面文字框');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setTranslationError('');
+    setTranslationStatus({
+      stage: 'overlay-ocr',
+      progress: 15,
+      message: '正在生成原位对照 OCR',
+      transport: 'overlay',
+      model: currentModel?.label || assistantModel || null,
+      fallbackUsed: false,
+      fallbackLevel: 0,
+      fallbackReason: '',
+    });
+
+    try {
+      const ocrResponse = await fetch('/api/pdf/overlay-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfBase64,
+          filename: pdfFile?.name || 'paper.pdf',
+          provider: assistantModel,
+          engine: 'auto',
+          pageLimit: overlayPageLimit === 'all' ? 'all' : 1,
+        }),
+      });
+      const { payload: ocrPayload, rawText: ocrRawText } = await readApiPayload(ocrResponse);
+
+      if (!ocrResponse.ok || !ocrPayload.success) {
+        throw new Error(formatApiError(ocrResponse, ocrPayload, ocrRawText, '原位 OCR 失败'));
+      }
+
+      const recognizedPages = ocrPayload.data?.pages || [];
+      const blockCount = recognizedPages.reduce((sum, page) => sum + (page.blocks?.length || 0), 0);
+      const totalPages = ocrPayload.data?.totalPages || recognizedPages.length;
+      const pageScope = recognizedPages.length < totalPages
+        ? `前 ${recognizedPages.length}/${totalPages} 页`
+        : `${recognizedPages.length} 页`;
+      setOverlayPages(recognizedPages);
+      setOverlayStatus(`已识别${pageScope}、${blockCount} 个文本块，正在生成译文覆盖层`);
+      setOverlayLoading(false);
+      setOverlayTranslating(true);
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'overlay-translate',
+        progress: 55,
+        message: `已识别${pageScope}、${blockCount} 个文本块，正在翻译覆盖层`,
+        model: ocrPayload.meta?.model || current.model,
+      }));
+
+      const translateResponse = await fetch('/api/translate-overlay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pages: recognizedPages,
+          sourceLang,
+          targetLang,
+          field: translationField,
+          provider: assistantModel,
+        }),
+      });
+      const { payload: translatePayload, rawText: translateRawText } = await readApiPayload(translateResponse);
+
+      if (!translateResponse.ok || !translatePayload.success) {
+        throw new Error(formatApiError(translateResponse, translatePayload, translateRawText, '原位覆盖翻译失败'));
+      }
+
+      const translatedPages = translatePayload.data?.pages || recognizedPages;
+      setOverlayPages(translatedPages);
+      setOverlayStatus('原位对照已生成');
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'overlay-done',
+        progress: 100,
+        message: '原位对照已生成',
+        model: translatePayload.meta?.model || current.model,
+      }));
+      savePdfHistoryItem({
+        filename: pdfFile?.name || 'paper.pdf',
+        fileSize: pdfFile?.size || 0,
+        totalPages: pdfPages.length || translatedPages.length,
+        originalText: pdfText,
+        translatedText,
+        status: 'overlay',
+        transport: 'overlay',
+        model: translatePayload.meta?.model || ocrPayload.meta?.model || assistantModel,
+        overlayPages: translatedPages,
+        overlayStatus: '原位对照已生成',
+      });
+    } catch (error) {
+      setTranslationError(error.message);
+      setOverlayStatus(error.message);
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'error',
+        progress: Math.max(current.progress, 15),
+        message: '原位对照生成失败',
+        fallbackReason: error.message,
+      }));
+    } finally {
+      setOverlayLoading(false);
+      setOverlayTranslating(false);
+    }
+  }
+
   async function handleExport() {
     if (!translatedText) {
       setTranslationError('没有可导出的译文');
@@ -1268,6 +1401,11 @@ function editModel(model) {
     setTranslatedText('');
     setTranslationError('');
     setShowBilingual(false);
+    setTranslationPreviewMode('text');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setOverlayVisible(true);
+    setOverlayStatus('');
     setTranslationStatus(INITIAL_TRANSLATION_STATUS);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -1686,6 +1824,32 @@ function editModel(model) {
                 </div>
 
                 <div style={subsectionStyle()}>
+                  <div style={subsectionTitleStyle()}>原位对照</div>
+                  <ContextRow label="状态" value={overlayStatus || '未生成'} />
+                  <ContextRow label="页数" value={overlayPages.length ? `${overlayPages.length} 页` : '—'} />
+                  <ContextRow label="译文层" value={overlayVisible ? '显示' : '隐藏'} />
+                  <label style={fieldLabelStyle()}>
+                    识别范围
+                    <select
+                      value={overlayPageLimit}
+                      onChange={(event) => setOverlayPageLimit(event.target.value)}
+                      style={selectStyle()}
+                      disabled={overlayLoading || overlayTranslating}
+                    >
+                      <option value="one">先看 1 页</option>
+                      <option value="all">全部页面</option>
+                    </select>
+                  </label>
+                  <button
+                    onClick={handleGenerateOverlay}
+                    disabled={overlayLoading || overlayTranslating || !pdfBase64}
+                    style={primaryButtonStyle(!(overlayLoading || overlayTranslating || !pdfBase64))}
+                  >
+                    {overlayLoading ? '识别中…' : overlayTranslating ? '覆盖翻译中…' : '生成原位对照'}
+                  </button>
+                </div>
+
+                <div style={subsectionStyle()}>
                   <div style={subsectionTitleStyle()}>导出</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                     <button onClick={() => setExportFormat('docx')} style={segmentButtonStyle(exportFormat === 'docx')}>Word</button>
@@ -1713,6 +1877,12 @@ function editModel(model) {
                     <div style={{ fontSize: 24, fontWeight: 700 }}>翻译预览</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setTranslationPreviewMode('text')} style={segmentButtonStyle(translationPreviewMode === 'text')}>
+                      正文译文
+                    </button>
+                    <button onClick={() => setTranslationPreviewMode('overlay')} style={segmentButtonStyle(translationPreviewMode === 'overlay')}>
+                      原位对照
+                    </button>
                     <button onClick={() => setShowBilingual((current) => !current)} style={secondaryButtonStyle()}>
                       {showBilingual ? '仅看译文' : '原文 / 译文'}
                     </button>
@@ -1723,7 +1893,17 @@ function editModel(model) {
                 </header>
 
                 <div style={previewSurfaceStyle()}>
-                  {!hasTranslationOutput && pdfText.trim() ? (
+                  {translationPreviewMode === 'overlay' ? (
+                    <OverlayPreview
+                      pages={overlayPages}
+                      pageIndex={overlayPageIndex}
+                      setPageIndex={setOverlayPageIndex}
+                      overlayVisible={overlayVisible}
+                      setOverlayVisible={setOverlayVisible}
+                      loading={overlayLoading || overlayTranslating}
+                      status={overlayStatus}
+                    />
+                  ) : !hasTranslationOutput && pdfText.trim() ? (
                     <PreviewBlock title="原文" content={pdfText} />
                   ) : !hasTranslationOutput ? (
                     <div style={{ color: 'var(--text3)', lineHeight: 1.8 }}>
@@ -1973,6 +2153,92 @@ function PreviewBlock({ title, content }) {
       </div>
     </div>
   );
+}
+
+function OverlayPreview({
+  pages,
+  pageIndex,
+  setPageIndex,
+  overlayVisible,
+  setOverlayVisible,
+  loading,
+  status,
+}) {
+  const safeIndex = Math.min(Math.max(pageIndex, 0), Math.max(pages.length - 1, 0));
+  const page = pages[safeIndex];
+
+  if (!page) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>原位对照</div>
+        <div>{loading ? (status || '正在生成原位对照…') : '点击左侧“生成原位对照”，这里会显示原页图片和译文覆盖层。'}</div>
+      </div>
+    );
+  }
+
+  const visibleBlocks = (page.blocks || []).filter(shouldRenderOverlayBlock);
+
+  return (
+    <div style={overlayPreviewWrapStyle()}>
+      <div style={overlayToolbarStyle()}>
+        <div>{status || `第 ${page.pageNumber} 页`}</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setOverlayVisible((current) => !current)}
+            style={secondaryButtonStyle()}
+          >
+            {overlayVisible ? '隐藏译文层' : '显示译文层'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPageIndex(Math.max(0, safeIndex - 1))}
+            disabled={safeIndex === 0}
+            style={secondaryButtonStyle()}
+          >
+            上一页
+          </button>
+          <span style={{ color: 'var(--text3)' }}>{safeIndex + 1} / {pages.length}</span>
+          <button
+            type="button"
+            onClick={() => setPageIndex(Math.min(pages.length - 1, safeIndex + 1))}
+            disabled={safeIndex >= pages.length - 1}
+            style={secondaryButtonStyle()}
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+
+      <div style={overlayCanvasStyle(page)}>
+        <img src={page.imageUrl} alt={`PDF page ${page.pageNumber}`} style={overlayImageStyle(overlayVisible)} />
+        {overlayVisible && (
+          <div style={overlayLayerStyle()}>
+            {visibleBlocks.map((block) => (
+              <div key={block.id} style={overlayBoxStyle(block, page)} title={block.text}>
+                {formatOverlayText(block.translatedText || block.text)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function shouldRenderOverlayBlock(block) {
+  if (!block || block.preserveOriginal) return false;
+  if (block.type === 'formula' || block.type === 'reference') return false;
+
+  const source = String(block.text || '').trim();
+  const translated = String(block.translatedText || '').trim();
+  return Boolean(translated && translated !== source);
+}
+
+function formatOverlayText(text = '') {
+  return cleanPreviewText(text)
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function PreviewParagraph({ block }) {
@@ -2754,6 +3020,108 @@ function previewDocumentStyle() {
     color: 'var(--text)',
     fontSize: 15,
     lineHeight: 1.95,
+  };
+}
+
+function overlayEmptyStyle() {
+  return {
+    display: 'grid',
+    placeContent: 'center',
+    minHeight: 420,
+    color: 'var(--text3)',
+    textAlign: 'center',
+    lineHeight: 1.8,
+  };
+}
+
+function overlayPreviewWrapStyle() {
+  return {
+    display: 'grid',
+    gap: 14,
+    minWidth: 0,
+    height: '100%',
+  };
+}
+
+function overlayToolbarStyle() {
+  return {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    color: 'var(--text2)',
+    fontSize: 12,
+  };
+}
+
+function overlayCanvasStyle(page) {
+  return {
+    position: 'relative',
+    width: '100%',
+    maxWidth: page?.width ? Math.min(page.width, 1180) : 1180,
+    margin: '0 auto',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    overflow: 'hidden',
+    background: '#fff',
+    boxShadow: '0 12px 30px rgba(45, 38, 28, 0.08)',
+    aspectRatio: page?.width && page?.height ? `${page.width} / ${page.height}` : undefined,
+  };
+}
+
+function overlayImageStyle(isDimmed) {
+  return {
+    display: 'block',
+    width: '100%',
+    maxHeight: 'none',
+    objectFit: 'contain',
+    opacity: isDimmed ? 0.48 : 1,
+    transition: 'opacity .18s ease',
+  };
+}
+
+function overlayLayerStyle() {
+  return {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+  };
+}
+
+function overlayBoxStyle(block, page) {
+  const bbox = block.bbox || {};
+  const pageWidth = page?.width || 1;
+  const pageHeight = page?.height || 1;
+  const isTitle = block.type === 'title';
+  const area = Number(bbox.width || pageWidth) * Number(bbox.height || 1);
+  const textLength = String(block.translatedText || block.text || '').length;
+  const density = area ? textLength / area : 0;
+  const boxHeight = Number(bbox.height || 1);
+  const fontSize = isTitle
+    ? Math.max(10, Math.min(15, boxHeight * 0.32))
+    : Math.max(7.5, Math.min(11, density > 0.026 ? boxHeight * 0.12 : boxHeight * 0.16));
+
+  return {
+    position: 'absolute',
+    left: `${(Number(bbox.x || 0) / pageWidth) * 100}%`,
+    top: `${(Number(bbox.y || 0) / pageHeight) * 100}%`,
+    width: `${(Number(bbox.width || pageWidth) / pageWidth) * 100}%`,
+    height: `${(Number(bbox.height || 1) / pageHeight) * 100}%`,
+    padding: isTitle ? '3px 6px' : '2px 5px',
+    borderRadius: 4,
+    border: '1px solid rgba(84, 72, 55, 0.18)',
+    background: isTitle ? 'rgba(255, 255, 255, 0.98)' : 'rgba(255, 255, 255, 0.96)',
+    color: '#1f2933',
+    fontSize,
+    lineHeight: isTitle ? 1.18 : 1.22,
+    fontWeight: isTitle ? 700 : 500,
+    overflow: 'auto',
+    overflowWrap: 'break-word',
+    wordBreak: 'normal',
+    textAlign: 'left',
+    boxShadow: '0 3px 10px rgba(30, 25, 18, 0.10)',
+    backdropFilter: 'blur(1.5px)',
+    scrollbarWidth: 'none',
   };
 }
 
