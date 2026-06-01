@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { canTranslatePdfState, createPdfHistoryItem } from '../lib/services/pdf-history';
 import { normalizePreviewForDisplay, segmentPreviewBlocks } from '../lib/services/preview-format';
 
 const PRIMARY_VIEWS = [
@@ -244,7 +245,14 @@ function readPdfHistory() {
 }
 
 function writePdfHistory(items) {
-  window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(items.slice(0, MAX_PDF_HISTORY)));
+  const next = items.slice(0, MAX_PDF_HISTORY);
+
+  try {
+    window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    const compact = next.map((item) => ({ ...item, pdfBase64: '' }));
+    window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(compact));
+  }
 }
 
 async function writeClipboardText(text) {
@@ -440,23 +448,20 @@ export default function HomePage() {
   const hasTranslationOutput = Boolean(translatedText.trim());
 
   const savePdfHistoryItem = useCallback((item) => {
-    const nextItem = {
-      id: item.id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-      filename: item.filename || 'paper.pdf',
-      fileSize: item.fileSize || 0,
-      totalPages: item.totalPages || 0,
-      field: item.field || translationField,
-      sourceLang: item.sourceLang || sourceLang,
-      targetLang: item.targetLang || targetLang,
-      transport: item.transport || translationStatus.transport || 'parsed',
-      model: item.model || translationStatus.model || assistantModel || '',
-      status: item.status || 'parsed',
-      translatedText: cleanPreviewText(item.translatedText || translatedText).slice(0, 80000),
-      originalText: cleanPreviewText(item.originalText || pdfText).slice(0, 30000),
-      overlayPages: Array.isArray(item.overlayPages) ? item.overlayPages : [],
-      overlayStatus: item.overlayStatus || '',
-      updatedAt: new Date().toISOString(),
-    };
+    const nextItem = createPdfHistoryItem({
+      item,
+      cleaner: cleanPreviewText,
+      defaults: {
+        field: translationField,
+        sourceLang,
+        targetLang,
+        transport: translationStatus.transport || 'parsed',
+        model: translationStatus.model || assistantModel || '',
+        translatedText,
+        originalText: pdfText,
+        pdfBase64,
+      },
+    });
 
     setPdfHistory((current) => {
       const deduped = current.filter((entry) => entry.filename !== nextItem.filename);
@@ -464,14 +469,14 @@ export default function HomePage() {
       writePdfHistory(next);
       return next;
     });
-  }, [assistantModel, pdfText, sourceLang, targetLang, translatedText, translationField, translationStatus.model, translationStatus.transport]);
+  }, [assistantModel, pdfBase64, pdfText, sourceLang, targetLang, translatedText, translationField, translationStatus.model, translationStatus.transport]);
 
   const restorePdfHistoryItem = useCallback((item) => {
     setPdfFile({
       name: item.filename,
       size: item.fileSize || 0,
     });
-    setPdfBase64('');
+    setPdfBase64(item.pdfBase64 || '');
     setPdfText(item.originalText || '');
     setPdfPages(Array.from({ length: item.totalPages || 0 }, (_, index) => ({ pageNumber: index + 1, text: '' })));
     setTranslatedText(item.translatedText || '');
@@ -487,7 +492,13 @@ export default function HomePage() {
     setTranslationStatus({
       stage: item.status === 'done' ? 'done' : 'parsed',
       progress: item.status === 'done' ? 100 : 0,
-      message: item.overlayPages?.length ? '已从历史记录恢复原位对照' : item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录',
+      message: item.overlayPages?.length
+        ? '已从历史记录恢复原位对照'
+        : item.pdfBase64
+          ? item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录'
+          : item.originalText
+            ? '已恢复历史 PDF 文本，原始文件未保存时将使用文本翻译'
+            : '已恢复历史 PDF 记录',
       transport: item.transport || null,
       model: item.model || null,
       fallbackUsed: item.transport === 'text-fallback',
@@ -1110,6 +1121,7 @@ function editModel(model) {
         filename: file.name,
         fileSize: file.size,
         totalPages: payload.data.totalPages,
+        pdfBase64: fileBase64,
         originalText: payload.data.text,
         status: 'parsed',
         transport: 'parsed',
@@ -1128,8 +1140,10 @@ function editModel(model) {
   }
 
   async function handleTranslate() {
-    if (!pdfBase64) {
-      setTranslationError('请先上传 PDF');
+    const useTextOnlyHistory = !pdfBase64 && Boolean(pdfText.trim());
+
+    if (!canTranslatePdfState({ pdfBase64, pdfText })) {
+      setTranslationError('请先上传 PDF，或载入包含解析文本的历史记录');
       return;
     }
 
@@ -1139,29 +1153,38 @@ function editModel(model) {
     setTranslationStatus({
       stage: 'uploading',
       progress: 10,
-      message: '准备开始翻译',
-      transport: null,
-      model: null,
-      fallbackUsed: false,
-      fallbackLevel: 0,
+      message: useTextOnlyHistory ? '历史记录缺少原始 PDF，准备使用文本翻译' : '准备开始翻译',
+      transport: useTextOnlyHistory ? 'text-fallback' : null,
+      model: useTextOnlyHistory ? assistantModel : null,
+      fallbackUsed: useTextOnlyHistory,
+      fallbackLevel: useTextOnlyHistory ? 3 : 0,
       fallbackReason: '',
     });
 
     try {
-      const response = await fetch('/api/translate-pdf', {
+      const response = await fetch(useTextOnlyHistory ? '/api/translate' : '/api/translate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pdfBase64,
-          filename: pdfFile?.name || 'paper.pdf',
-          extractedText: pdfText,
-          pages: pdfPages,
-          sourceLang,
-          targetLang,
-          field: translationField,
-          provider: assistantModel,
-          stream: true,
-        }),
+        body: JSON.stringify(useTextOnlyHistory
+          ? {
+            text: pdfText,
+            sourceLang,
+            targetLang,
+            field: translationField,
+            model: assistantModel,
+            stream: true,
+          }
+          : {
+            pdfBase64,
+            filename: pdfFile?.name || 'paper.pdf',
+            extractedText: pdfText,
+            pages: pdfPages,
+            sourceLang,
+            targetLang,
+            field: translationField,
+            provider: assistantModel,
+            stream: true,
+          }),
       });
 
       if (!response.ok) {
@@ -1198,10 +1221,10 @@ function editModel(model) {
               stage: payload.stage || current.stage,
               progress: typeof payload.progress === 'number' ? payload.progress : current.progress,
               message: payload.message || current.message,
-              transport: payload.meta?.transport || current.transport,
+              transport: payload.meta?.transport || (useTextOnlyHistory ? 'text-fallback' : current.transport),
               model: payload.meta?.model || current.model,
-              fallbackUsed: payload.meta?.fallbackUsed ?? current.fallbackUsed,
-              fallbackLevel: payload.meta?.fallbackLevel ?? current.fallbackLevel,
+              fallbackUsed: payload.meta?.fallbackUsed ?? (useTextOnlyHistory || current.fallbackUsed),
+              fallbackLevel: payload.meta?.fallbackLevel ?? (useTextOnlyHistory ? 3 : current.fallbackLevel),
               fallbackReason: payload.meta?.fallbackReason || current.fallbackReason,
             }));
           }
@@ -1212,10 +1235,11 @@ function editModel(model) {
               filename: pdfFile?.name || 'paper.pdf',
               fileSize: pdfFile?.size || 0,
               totalPages: pdfPages.length,
+              pdfBase64,
               originalText: pdfText,
               translatedText: payload.data.translation,
               status: 'done',
-              transport: payload.meta?.transport || translationStatus.transport || 'text-fallback',
+              transport: payload.meta?.transport || (useTextOnlyHistory ? 'text-fallback' : translationStatus.transport) || 'text-fallback',
               model: payload.meta?.model || translationStatus.model || assistantModel,
             });
           }
@@ -1324,6 +1348,7 @@ function editModel(model) {
         filename: pdfFile?.name || 'paper.pdf',
         fileSize: pdfFile?.size || 0,
         totalPages: pdfPages.length || translatedPages.length,
+        pdfBase64,
         originalText: pdfText,
         translatedText,
         status: 'overlay',
