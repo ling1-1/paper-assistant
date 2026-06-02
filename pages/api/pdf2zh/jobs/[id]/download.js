@@ -11,12 +11,13 @@ export default async function handler(req, res) {
   try {
     const { id, type = 'dual' } = req.query || {};
     const downloadType = type === 'mono' ? 'mono' : 'dual';
+    const inline = req.query?.inline === '1' || req.query?.inline === 'true';
     const response = await fetchPdf2zhDownload(id, downloadType);
     const buffer = Buffer.from(await response.arrayBuffer());
     const filename = `${id}-${downloadType}.pdf`;
 
     res.setHeader('Content-Type', response.headers?.get?.('content-type') || 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${filename}"`);
     res.setHeader('Content-Length', String(buffer.length));
     return res.status(200).send(buffer);
   } catch (error) {

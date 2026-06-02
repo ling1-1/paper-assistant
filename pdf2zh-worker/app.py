@@ -45,6 +45,20 @@ def job_dir(job_id):
     return JOBS_DIR / job_id
 
 
+def dir_size(path):
+    if not path.exists():
+        return 0
+
+    total = 0
+    for item in path.rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
 def status_path(job_id):
     return job_dir(job_id) / "status.json"
 
@@ -237,6 +251,26 @@ def get_job(job_id):
     if not status:
         return jsonify({"error": "job not found"}), 404
     return jsonify(status)
+
+
+@app.delete("/jobs/<job_id>")
+def delete_job(job_id):
+    status = read_status(job_id)
+    work_dir = job_dir(job_id)
+    if not status and not work_dir.exists():
+        return jsonify({"error": "job not found"}), 404
+
+    if status and status.get("status") in {"queued", "running", "submitting"}:
+        return jsonify({"error": "job is still running, delete it after completion"}), 409
+
+    bytes_freed = dir_size(work_dir)
+    shutil.rmtree(work_dir, ignore_errors=True)
+    return jsonify({
+        "success": True,
+        "id": job_id,
+        "deleted": True,
+        "bytesFreed": bytes_freed,
+    })
 
 
 @app.get("/jobs/<job_id>/download")

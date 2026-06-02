@@ -367,6 +367,7 @@ export default function HomePage() {
   const [pdf2zhJob, setPdf2zhJob] = useState(null);
   const [pdf2zhLoading, setPdf2zhLoading] = useState(false);
   const [pdf2zhError, setPdf2zhError] = useState('');
+  const [pdf2zhPreviewType, setPdf2zhPreviewType] = useState('mono');
   const [translationError, setTranslationError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -382,6 +383,7 @@ export default function HomePage() {
   const abortRef = useRef(null);
   const fileInputRef = useRef(null);
   const chatAttachmentInputRef = useRef(null);
+  const lastSavedPdf2zhJobIdRef = useRef('');
 
   useEffect(() => {
     setMounted(true);
@@ -513,6 +515,28 @@ export default function HomePage() {
     });
   }, [assistantModel, pdfBase64, pdfText, sourceLang, targetLang, translatedText, translationField, translationStatus.model, translationStatus.transport]);
 
+  useEffect(() => {
+    if (pdf2zhJob?.status !== 'done' || !pdf2zhJob.id) return;
+    if (lastSavedPdf2zhJobIdRef.current === pdf2zhJob.id) return;
+
+    lastSavedPdf2zhJobIdRef.current = pdf2zhJob.id;
+    setPdf2zhPreviewType('mono');
+    setTranslationPreviewMode('pdf2zh');
+    savePdfHistoryItem({
+      filename: pdfFile?.name || pdf2zhJob.filename || 'paper.pdf',
+      fileSize: pdfFile?.size || pdf2zhJob.fileSize || 0,
+      totalPages: pdfPages.length || 0,
+      pdfBase64,
+      originalText: pdfText,
+      translatedText,
+      status: 'pdf2zh',
+      transport: 'pdf2zh',
+      model: 'pdf2zh',
+      pdf2zhJob,
+      pdf2zhPreviewType: 'mono',
+    });
+  }, [pdf2zhJob, pdfBase64, pdfFile?.name, pdfFile?.size, pdfPages.length, pdfText, savePdfHistoryItem, translatedText]);
+
   const restorePdfHistoryItem = useCallback((item) => {
     setPdfFile({
       name: item.filename,
@@ -523,7 +547,9 @@ export default function HomePage() {
     setPdfPages(Array.from({ length: item.totalPages || 0 }, (_, index) => ({ pageNumber: index + 1, text: '' })));
     setTranslatedText(item.translatedText || '');
     setShowBilingual(Boolean(item.originalText && !item.translatedText));
-    setTranslationPreviewMode(item.overlayPages?.length ? 'overlay' : 'text');
+    setPdf2zhJob(item.pdf2zhJob || null);
+    setPdf2zhPreviewType(item.pdf2zhPreviewType || 'mono');
+    setTranslationPreviewMode(item.pdf2zhJob?.status === 'done' ? 'pdf2zh' : item.overlayPages?.length ? 'overlay' : 'text');
     setOverlayPages(item.overlayPages || []);
     setOverlayPageIndex(0);
     setOverlayStatus(item.overlayStatus || (item.overlayPages?.length ? '已从历史记录恢复原位对照' : ''));
@@ -549,6 +575,23 @@ export default function HomePage() {
     });
   }, []);
 
+  const deleteRemotePdf2zhJob = useCallback(async (jobId) => {
+    if (!jobId) return null;
+
+    const response = await fetch(`/api/pdf2zh/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'DELETE',
+    });
+    const { payload, rawText } = await readApiPayload(response);
+    if (!response.ok || !payload.success) {
+      const message = formatApiError(response, payload, rawText, 'pdf2zh 文件删除失败');
+      if (!/not found|job not found|不存在|未找到/i.test(message)) {
+        throw new Error(message);
+      }
+    }
+
+    return payload;
+  }, []);
+
   const renamePdfHistoryItem = useCallback((item) => {
     const nextName = window.prompt('重命名这条 PDF 处理记录', item.filename || '');
     if (!nextName?.trim()) return;
@@ -564,15 +607,59 @@ export default function HomePage() {
     });
   }, []);
 
-  const deletePdfHistoryItem = useCallback((item) => {
+  const deletePdfHistoryItem = useCallback(async (item) => {
     if (!window.confirm(`删除处理记录“${item.filename}”？`)) return;
 
-    setPdfHistory((current) => {
-      const next = current.filter((entry) => entry.id !== item.id);
-      writePdfHistory(next);
-      return next;
-    });
-  }, []);
+    try {
+      if (item.pdf2zhJob?.id) {
+        await deleteRemotePdf2zhJob(item.pdf2zhJob.id);
+      }
+
+      setPdfHistory((current) => {
+        const next = current.filter((entry) => entry.id !== item.id);
+        writePdfHistory(next);
+        return next;
+      });
+
+      if (pdf2zhJob?.id === item.pdf2zhJob?.id) {
+        setPdf2zhJob(null);
+      }
+    } catch (error) {
+      setPdf2zhError(error.message);
+    }
+  }, [deleteRemotePdf2zhJob, pdf2zhJob?.id]);
+
+  const cleanupPdfHistoryGeneratedFiles = useCallback(async (item) => {
+    if (!item.pdf2zhJob?.id) return;
+    if (!window.confirm(`清理“${item.filename}”的排版 PDF 生成文件？历史记录会保留，但单语/双语 PDF 需要重新生成。`)) return;
+
+    try {
+      const payload = await deleteRemotePdf2zhJob(item.pdf2zhJob.id);
+      const deletedJobId = item.pdf2zhJob.id;
+      const bytesFreed = payload?.data?.result?.bytesFreed || payload?.result?.bytesFreed || 0;
+
+      setPdfHistory((current) => {
+        const next = current.map((entry) => (
+          entry.id === item.id
+            ? { ...entry, pdf2zhJob: null, updatedAt: new Date().toISOString() }
+            : entry
+        ));
+        writePdfHistory(next);
+        return next;
+      });
+
+      if (pdf2zhJob?.id === deletedJobId) {
+        setPdf2zhJob(null);
+        if (translationPreviewMode === 'pdf2zh') {
+          setTranslationPreviewMode(translatedText ? 'text' : 'overlay');
+        }
+      }
+
+      setPdf2zhError(bytesFreed ? `已清理生成文件，释放约 ${formatBytes(bytesFreed)}。` : '已清理生成文件。');
+    } catch (error) {
+      setPdf2zhError(error.message);
+    }
+  }, [deleteRemotePdf2zhJob, pdf2zhJob?.id, translatedText, translationPreviewMode]);
 
   const loadConversations = useCallback(async () => {
     try {
@@ -1426,6 +1513,9 @@ function editModel(model) {
 
     setPdf2zhLoading(true);
     setPdf2zhError('');
+    lastSavedPdf2zhJobIdRef.current = '';
+    setPdf2zhPreviewType('mono');
+    setTranslationPreviewMode('pdf2zh');
     setPdf2zhJob({
       id: '',
       status: 'submitting',
@@ -1459,6 +1549,33 @@ function editModel(model) {
       setPdf2zhJob(null);
     } finally {
       setPdf2zhLoading(false);
+    }
+  }
+
+  async function handleDeleteCurrentPdf2zhJob() {
+    if (!pdf2zhJob?.id) return;
+    if (!window.confirm('删除当前排版翻译生成的 PDF 文件？这会释放服务器存储空间。')) return;
+
+    try {
+      const payload = await deleteRemotePdf2zhJob(pdf2zhJob.id);
+      const deletedJobId = pdf2zhJob.id;
+      const bytesFreed = payload?.data?.result?.bytesFreed || payload?.result?.bytesFreed || 0;
+      setPdf2zhJob(null);
+      setPdf2zhError(bytesFreed ? `已删除当前排版 PDF 文件，释放约 ${formatBytes(bytesFreed)}。` : '已删除当前排版 PDF 文件。');
+      if (translationPreviewMode === 'pdf2zh') {
+        setTranslationPreviewMode(translatedText ? 'text' : 'overlay');
+      }
+      setPdfHistory((current) => {
+        const next = current.map((entry) => (
+          entry.pdf2zhJob?.id === deletedJobId
+            ? { ...entry, pdf2zhJob: null, updatedAt: new Date().toISOString() }
+            : entry
+        ));
+        writePdfHistory(next);
+        return next;
+      });
+    } catch (error) {
+      setPdf2zhError(error.message);
     }
   }
 
@@ -1875,6 +1992,9 @@ function editModel(model) {
                           <div style={{ display: 'flex', gap: 10 }}>
                             <button type="button" onClick={() => restorePdfHistoryItem(item)} style={plainTextButtonStyle()}>载入</button>
                             <button type="button" onClick={() => renamePdfHistoryItem(item)} style={plainTextButtonStyle()}>重命名</button>
+                            {item.pdf2zhJob?.id && (
+                              <button type="button" onClick={() => cleanupPdfHistoryGeneratedFiles(item)} style={plainTextButtonStyle()}>清理文件</button>
+                            )}
                             <button type="button" onClick={() => deletePdfHistoryItem(item)} style={plainTextButtonStyle()}>删除</button>
                           </div>
                         </div>
@@ -1971,6 +2091,9 @@ function editModel(model) {
                   <ContextRow label="引擎" value="pdf2zh" />
                   <ContextRow label="状态" value={pdf2zhStatusLabel} />
                   <ContextRow label="进度" value={pdf2zhJob?.progress != null ? `${Math.round(pdf2zhJob.progress)}%` : '—'} />
+                  <div style={infoNoteStyle()}>
+                    排版 PDF 适合快速导出。双语版会按“原文页 / 译文页”交替排列，不是同页双栏；含水印或复杂图表的论文建议优先检查单语版。
+                  </div>
                   {pdf2zhJob?.error && (
                     <div style={errorNoteStyle()}>{pdf2zhJob.error}</div>
                   )}
@@ -1985,19 +2108,46 @@ function editModel(model) {
                     {pdf2zhLoading ? '提交中…' : '生成排版 PDF'}
                   </button>
                   {pdf2zhCanDownload && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-                      <a
-                        href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=mono`}
-                        style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
-                      >
-                        单语 PDF
-                      </a>
-                      <a
-                        href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=dual`}
-                        style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
-                      >
-                        双语 PDF
-                      </a>
+                    <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdf2zhPreviewType('mono');
+                            setTranslationPreviewMode('pdf2zh');
+                          }}
+                          style={segmentButtonStyle(pdf2zhPreviewType === 'mono' && translationPreviewMode === 'pdf2zh')}
+                        >
+                          预览单语
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdf2zhPreviewType('dual');
+                            setTranslationPreviewMode('pdf2zh');
+                          }}
+                          style={segmentButtonStyle(pdf2zhPreviewType === 'dual' && translationPreviewMode === 'pdf2zh')}
+                        >
+                          预览双语
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <a
+                          href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=mono`}
+                          style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                        >
+                          下载单语
+                        </a>
+                        <a
+                          href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=dual`}
+                          style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                        >
+                          下载双语
+                        </a>
+                      </div>
+                      <button type="button" onClick={handleDeleteCurrentPdf2zhJob} style={secondaryButtonStyle()}>
+                        删除生成文件
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2036,6 +2186,9 @@ function editModel(model) {
                     <button onClick={() => setTranslationPreviewMode('overlay')} style={segmentButtonStyle(translationPreviewMode === 'overlay')}>
                       原位对照
                     </button>
+                    <button onClick={() => setTranslationPreviewMode('pdf2zh')} style={segmentButtonStyle(translationPreviewMode === 'pdf2zh')}>
+                      排版 PDF
+                    </button>
                     <button onClick={() => setShowBilingual((current) => !current)} style={secondaryButtonStyle()}>
                       {showBilingual ? '仅看译文' : '原文 / 译文'}
                     </button>
@@ -2046,7 +2199,13 @@ function editModel(model) {
                 </header>
 
                 <div style={previewSurfaceStyle()}>
-                  {translationPreviewMode === 'overlay' ? (
+                  {translationPreviewMode === 'pdf2zh' ? (
+                    <Pdf2zhPreview
+                      job={pdf2zhJob}
+                      previewType={pdf2zhPreviewType}
+                      setPreviewType={setPdf2zhPreviewType}
+                    />
+                  ) : translationPreviewMode === 'overlay' ? (
                     <OverlayPreview
                       pages={overlayPages}
                       pageIndex={overlayPageIndex}
@@ -2308,6 +2467,64 @@ function PreviewBlock({ title, content }) {
   );
 }
 
+function Pdf2zhPreview({ job, previewType, setPreviewType }) {
+  const isDone = job?.status === 'done' && job.id;
+  const safeType = previewType === 'dual' ? 'dual' : 'mono';
+  const previewUrl = isDone
+    ? `/api/pdf2zh/jobs/${encodeURIComponent(job.id)}/download?type=${safeType}&inline=1`
+    : '';
+
+  if (!job) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>排版 PDF</div>
+        <div>点击左侧“生成排版 PDF”，完成后可在这里直接预览单语或双语 PDF。</div>
+      </div>
+    );
+  }
+
+  if (!isDone) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>排版 PDF</div>
+        <div>{job.status === 'failed' ? (job.error || '排版翻译失败') : `正在处理：${job.stage || job.status || '排队中'}，${Math.round(job.progress || 0)}%`}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={pdf2zhPreviewWrapStyle()}>
+      <div style={overlayToolbarStyle()}>
+        <div>
+          <div style={{ fontWeight: 700 }}>排版 PDF 预览</div>
+          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+            双语 PDF 为原文页与译文页交替显示；若要快速检查翻译完整性，建议先看单语 PDF。
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button type="button" onClick={() => setPreviewType('mono')} style={segmentButtonStyle(safeType === 'mono')}>
+            单语
+          </button>
+          <button type="button" onClick={() => setPreviewType('dual')} style={segmentButtonStyle(safeType === 'dual')}>
+            双语
+          </button>
+          <a
+            href={`/api/pdf2zh/jobs/${encodeURIComponent(job.id)}/download?type=${safeType}`}
+            style={{ ...secondaryButtonStyle(), textDecoration: 'none' }}
+          >
+            下载当前 PDF
+          </a>
+        </div>
+      </div>
+      <iframe
+        title={`pdf2zh-${safeType}-preview`}
+        src={previewUrl}
+        style={pdf2zhIframeStyle()}
+      />
+    </div>
+  );
+}
+
 function OverlayPreview({
   pages,
   pageIndex,
@@ -2488,8 +2705,18 @@ function pdfHistoryTransportLabel(transport) {
   if (transport === 'ark-file') return '直传';
   if (transport === 'page-images') return '视觉';
   if (transport === 'text-fallback') return '文本';
+  if (transport === 'pdf2zh') return '排版';
   if (transport === 'parsed') return '已解析';
   return '记录';
+}
+
+function formatBytes(value = 0) {
+  const bytes = Number(value) || 0;
+  if (bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function shortReason(reason = '') {
@@ -3173,6 +3400,27 @@ function previewDocumentStyle() {
     color: 'var(--text)',
     fontSize: 15,
     lineHeight: 1.95,
+  };
+}
+
+function pdf2zhPreviewWrapStyle() {
+  return {
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(520px, 1fr)',
+    gap: 14,
+    minWidth: 0,
+    height: '100%',
+  };
+}
+
+function pdf2zhIframeStyle() {
+  return {
+    width: '100%',
+    height: '100%',
+    minHeight: 620,
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    background: '#fff',
   };
 }
 

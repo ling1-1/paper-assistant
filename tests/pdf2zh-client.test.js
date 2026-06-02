@@ -3,6 +3,7 @@ const { test } = require('node:test');
 
 const {
   createPdf2zhJob,
+  deletePdf2zhJob,
   getPdf2zhJob,
   normalizePdf2zhJob,
   toPdf2zhWorkerUrl,
@@ -100,4 +101,19 @@ test('getPdf2zhJob fetches status from the worker', async () => {
   assert.equal(job.id, 'job-2');
   assert.equal(job.status, 'done');
   assert.equal(job.progress, 100);
+});
+
+test('deletePdf2zhJob removes a worker job directory', async () => {
+  const fakeFetch = async (url, options) => {
+    assert.equal(url, 'http://worker:8080/jobs/job-3');
+    assert.equal(options.method, 'DELETE');
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, id: 'job-3', deleted: true }),
+    };
+  };
+
+  const result = await deletePdf2zhJob('job-3', { workerUrl: 'http://worker:8080', fetchImpl: fakeFetch });
+  assert.deepEqual(result, { success: true, id: 'job-3', deleted: true });
 });
