@@ -364,6 +364,9 @@ export default function HomePage() {
   const [overlayTranslating, setOverlayTranslating] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState('');
   const [overlayPageLimit, setOverlayPageLimit] = useState('one');
+  const [pdf2zhJob, setPdf2zhJob] = useState(null);
+  const [pdf2zhLoading, setPdf2zhLoading] = useState(false);
+  const [pdf2zhError, setPdf2zhError] = useState('');
   const [translationError, setTranslationError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -423,6 +426,35 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!pdf2zhJob?.id || !['queued', 'running'].includes(pdf2zhJob.status)) return undefined;
+
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}`);
+        const { payload, rawText } = await readApiPayload(response);
+
+        if (!response.ok || !payload.success) {
+          throw new Error(formatApiError(response, payload, rawText, 'pdf2zh 状态查询失败'));
+        }
+
+        if (!cancelled) {
+          setPdf2zhJob(payload.data.job);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPdf2zhError(error.message);
+        }
+      }
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [pdf2zhJob?.id, pdf2zhJob?.status]);
+
   const currentAction = useMemo(
     () => TASK_ACTIONS.find((item) => item.intent === activeIntent) || null,
     [activeIntent],
@@ -446,6 +478,16 @@ export default function HomePage() {
   const missingModelConfig = modelsLoaded && currentModel && !currentModel.configured;
   const currentModelStatus = !modelsLoaded ? '加载中' : currentModel?.configured ? '已配置' : '待配置';
   const hasTranslationOutput = Boolean(translatedText.trim());
+  const pdf2zhCanDownload = pdf2zhJob?.status === 'done';
+  const pdf2zhStatusLabel = pdf2zhJob?.status
+    ? {
+      submitting: '提交中',
+      queued: '排队中',
+      running: '处理中',
+      done: '已完成',
+      failed: '失败',
+    }[pdf2zhJob.status] || pdf2zhJob.status
+    : '未启动';
 
   const savePdfHistoryItem = useCallback((item) => {
     const nextItem = createPdfHistoryItem({
@@ -1076,6 +1118,9 @@ function editModel(model) {
     setOverlayPages([]);
     setOverlayPageIndex(0);
     setOverlayStatus('');
+    setPdf2zhJob(null);
+    setPdf2zhLoading(false);
+    setPdf2zhError('');
     setTranslationStatus({
       stage: 'parsing',
       progress: 5,
@@ -1373,6 +1418,50 @@ function editModel(model) {
     }
   }
 
+  async function handleStartPdf2zh() {
+    if (!pdfBase64) {
+      setPdf2zhError('当前记录没有保存原始 PDF，请重新上传 PDF 后再启动排版翻译。');
+      return;
+    }
+
+    setPdf2zhLoading(true);
+    setPdf2zhError('');
+    setPdf2zhJob({
+      id: '',
+      status: 'submitting',
+      stage: 'submitting',
+      progress: 0,
+      filename: pdfFile?.name || 'paper.pdf',
+    });
+
+    try {
+      const response = await fetch('/api/pdf2zh/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfBase64,
+          filename: pdfFile?.name || 'paper.pdf',
+          sourceLang,
+          targetLang,
+          mode: 'dual',
+          pages: 'all',
+        }),
+      });
+      const { payload, rawText } = await readApiPayload(response);
+
+      if (!response.ok || !payload.success) {
+        throw new Error(formatApiError(response, payload, rawText, 'pdf2zh 任务提交失败'));
+      }
+
+      setPdf2zhJob(payload.data.job);
+    } catch (error) {
+      setPdf2zhError(error.message);
+      setPdf2zhJob(null);
+    } finally {
+      setPdf2zhLoading(false);
+    }
+  }
+
   async function handleExport() {
     if (!translatedText) {
       setTranslationError('没有可导出的译文');
@@ -1431,6 +1520,9 @@ function editModel(model) {
     setOverlayPageIndex(0);
     setOverlayVisible(true);
     setOverlayStatus('');
+    setPdf2zhJob(null);
+    setPdf2zhLoading(false);
+    setPdf2zhError('');
     setTranslationStatus(INITIAL_TRANSLATION_STATUS);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -1872,6 +1964,42 @@ function editModel(model) {
                   >
                     {overlayLoading ? '识别中…' : overlayTranslating ? '覆盖翻译中…' : '生成原位对照'}
                   </button>
+                </div>
+
+                <div style={subsectionStyle()}>
+                  <div style={subsectionTitleStyle()}>排版翻译</div>
+                  <ContextRow label="引擎" value="pdf2zh" />
+                  <ContextRow label="状态" value={pdf2zhStatusLabel} />
+                  <ContextRow label="进度" value={pdf2zhJob?.progress != null ? `${Math.round(pdf2zhJob.progress)}%` : '—'} />
+                  {pdf2zhJob?.error && (
+                    <div style={errorNoteStyle()}>{pdf2zhJob.error}</div>
+                  )}
+                  {pdf2zhError && (
+                    <div style={errorNoteStyle()}>{pdf2zhError}</div>
+                  )}
+                  <button
+                    onClick={handleStartPdf2zh}
+                    disabled={pdf2zhLoading || ['queued', 'running'].includes(pdf2zhJob?.status)}
+                    style={primaryButtonStyle(!(pdf2zhLoading || ['queued', 'running'].includes(pdf2zhJob?.status)))}
+                  >
+                    {pdf2zhLoading ? '提交中…' : '生成排版 PDF'}
+                  </button>
+                  {pdf2zhCanDownload && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                      <a
+                        href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=mono`}
+                        style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                      >
+                        单语 PDF
+                      </a>
+                      <a
+                        href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=dual`}
+                        style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                      >
+                        双语 PDF
+                      </a>
+                    </div>
+                  )}
                 </div>
 
                 <div style={subsectionStyle()}>
