@@ -13,14 +13,38 @@ services:
       PORT: "3000"
       DEFAULT_MODEL: ${DEFAULT_MODEL:-doubao}
       PDF_IMAGE_BATCH_PAGES: ${PDF_IMAGE_BATCH_PAGES:-3}
-      PDF_IMAGE_FALLBACK_MAX_PAGES: ${PDF_IMAGE_FALLBACK_MAX_PAGES:-20}
+      PDF_IMAGE_FALLBACK_MAX_PAGES: ${PDF_IMAGE_FALLBACK_MAX_PAGES:-80}
+      PDF_IMAGE_TRANSLATION_MAX_PAGES: ${PDF_IMAGE_TRANSLATION_MAX_PAGES:-80}
       PDF_IMAGE_RENDER_SCALE: ${PDF_IMAGE_RENDER_SCALE:-1}
       PDF_IMAGE_JPEG_QUALITY: ${PDF_IMAGE_JPEG_QUALITY:-0.78}
       VISION_MAX_TOKENS: ${VISION_MAX_TOKENS:-8192}
+      PDF2ZH_WORKER_URL: ${PDF2ZH_WORKER_URL:-http://pdf2zh-worker:8080}
+      PDF2ZH_SERVICE: ${PDF2ZH_SERVICE:-}
     ports:
       - "80:3000"
     volumes:
       - paper_assistant_data:/app/.data
+    depends_on:
+      - pdf2zh-worker
+
+  pdf2zh-worker:
+    build:
+      context: ./pdf2zh-worker
+      dockerfile: Dockerfile
+    image: paper-assistant-pdf2zh-worker:latest
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      PDF2ZH_DATA_DIR: /data
+      PDF2ZH_MAX_UPLOAD_MB: ${PDF2ZH_MAX_UPLOAD_MB:-120}
+      PDF2ZH_TIMEOUT_SECONDS: ${PDF2ZH_TIMEOUT_SECONDS:-3600}
+      PDF2ZH_SERVICE: ${PDF2ZH_SERVICE:-}
+    ports:
+      - "${PDF2ZH_WORKER_BIND:-127.0.0.1:8088}:8080"
+    volumes:
+      - pdf2zh_data:/data
 
 volumes:
   paper_assistant_data:
+  pdf2zh_data:

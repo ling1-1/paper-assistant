@@ -52,4 +52,7 @@ test('pdf vision batch prompt describes page range and avoids garbage transcript
   assert.match(prompt, /参考文献/);
   assert.match(prompt, /不要输出 HTML/);
   assert.match(prompt, /<sub>/);
+  assert.match(prompt, /必须完整处理每一张图片/);
+  assert.match(prompt, /页面下半部分/);
+  assert.match(prompt, /不要概括或摘要/);
 });

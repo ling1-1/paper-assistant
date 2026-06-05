@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  applyDefaultModelUpdate,
+  applyModelConfigSave,
+  createModelTestFeedback,
+} from '../lib/services/model-settings-state';
+import { canTranslatePdfState, createPdfHistoryItem } from '../lib/services/pdf-history';
 import { normalizePreviewForDisplay, segmentPreviewBlocks } from '../lib/services/preview-format';
 
 const PRIMARY_VIEWS = [
@@ -244,7 +250,14 @@ function readPdfHistory() {
 }
 
 function writePdfHistory(items) {
-  window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(items.slice(0, MAX_PDF_HISTORY)));
+  const next = items.slice(0, MAX_PDF_HISTORY);
+
+  try {
+    window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    const compact = next.map((item) => ({ ...item, pdfBase64: '' }));
+    window.localStorage.setItem(PDF_HISTORY_KEY, JSON.stringify(compact));
+  }
 }
 
 async function writeClipboardText(text) {
@@ -325,6 +338,7 @@ export default function HomePage() {
   const [modelSaving, setModelSaving] = useState(false);
   const [modelConfigMessage, setModelConfigMessage] = useState('');
   const [modelTestingId, setModelTestingId] = useState('');
+  const [modelTestResults, setModelTestResults] = useState({});
   const [activeIntent, setActiveIntent] = useState('general');
   const [loading, setLoading] = useState(false);
   const [litQuery, setLitQuery] = useState('');
@@ -348,6 +362,18 @@ export default function HomePage() {
   const [sourceLang, setSourceLang] = useState('en');
   const [targetLang, setTargetLang] = useState('zh');
   const [showBilingual, setShowBilingual] = useState(false);
+  const [translationPreviewMode, setTranslationPreviewMode] = useState('text');
+  const [overlayPages, setOverlayPages] = useState([]);
+  const [overlayPageIndex, setOverlayPageIndex] = useState(0);
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const [overlayLoading, setOverlayLoading] = useState(false);
+  const [overlayTranslating, setOverlayTranslating] = useState(false);
+  const [overlayStatus, setOverlayStatus] = useState('');
+  const [overlayPageLimit, setOverlayPageLimit] = useState('one');
+  const [pdf2zhJob, setPdf2zhJob] = useState(null);
+  const [pdf2zhLoading, setPdf2zhLoading] = useState(false);
+  const [pdf2zhError, setPdf2zhError] = useState('');
+  const [pdf2zhPreviewType, setPdf2zhPreviewType] = useState('mono');
   const [translationError, setTranslationError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -363,6 +389,7 @@ export default function HomePage() {
   const abortRef = useRef(null);
   const fileInputRef = useRef(null);
   const chatAttachmentInputRef = useRef(null);
+  const lastSavedPdf2zhJobIdRef = useRef('');
 
   useEffect(() => {
     setMounted(true);
@@ -407,6 +434,35 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!pdf2zhJob?.id || !['queued', 'running'].includes(pdf2zhJob.status)) return undefined;
+
+    let cancelled = false;
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}`);
+        const { payload, rawText } = await readApiPayload(response);
+
+        if (!response.ok || !payload.success) {
+          throw new Error(formatApiError(response, payload, rawText, 'pdf2zh 状态查询失败'));
+        }
+
+        if (!cancelled) {
+          setPdf2zhJob(payload.data.job);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPdf2zhError(error.message);
+        }
+      }
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [pdf2zhJob?.id, pdf2zhJob?.status]);
+
   const currentAction = useMemo(
     () => TASK_ACTIONS.find((item) => item.intent === activeIntent) || null,
     [activeIntent],
@@ -426,27 +482,39 @@ export default function HomePage() {
   const recentConversations = conversations.slice(0, 5);
   const currentModel = modelRegistry.find((item) => item.id === assistantModel)
     || (modelsLoaded ? BUILTIN_MODELS.find((item) => item.id === assistantModel) : null);
+  const defaultModel = modelRegistry.find((item) => item.id === defaultModelId)
+    || (modelsLoaded ? BUILTIN_MODELS.find((item) => item.id === defaultModelId) : null);
   const configuredModels = modelRegistry.filter((item) => item.configured);
+  const visionReadyModels = modelRegistry.filter((item) => item.supportsVision && item.visionConfigured);
   const missingModelConfig = modelsLoaded && currentModel && !currentModel.configured;
   const currentModelStatus = !modelsLoaded ? '加载中' : currentModel?.configured ? '已配置' : '待配置';
   const hasTranslationOutput = Boolean(translatedText.trim());
+  const pdf2zhCanDownload = pdf2zhJob?.status === 'done';
+  const pdf2zhStatusLabel = pdf2zhJob?.status
+    ? {
+      submitting: '提交中',
+      queued: '排队中',
+      running: '处理中',
+      done: '已完成',
+      failed: '失败',
+    }[pdf2zhJob.status] || pdf2zhJob.status
+    : '未启动';
 
   const savePdfHistoryItem = useCallback((item) => {
-    const nextItem = {
-      id: item.id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-      filename: item.filename || 'paper.pdf',
-      fileSize: item.fileSize || 0,
-      totalPages: item.totalPages || 0,
-      field: item.field || translationField,
-      sourceLang: item.sourceLang || sourceLang,
-      targetLang: item.targetLang || targetLang,
-      transport: item.transport || translationStatus.transport || 'parsed',
-      model: item.model || translationStatus.model || assistantModel || '',
-      status: item.status || 'parsed',
-      translatedText: cleanPreviewText(item.translatedText || translatedText).slice(0, 80000),
-      originalText: cleanPreviewText(item.originalText || pdfText).slice(0, 30000),
-      updatedAt: new Date().toISOString(),
-    };
+    const nextItem = createPdfHistoryItem({
+      item,
+      cleaner: cleanPreviewText,
+      defaults: {
+        field: translationField,
+        sourceLang,
+        targetLang,
+        transport: translationStatus.transport || 'parsed',
+        model: translationStatus.model || assistantModel || '',
+        translatedText,
+        originalText: pdfText,
+        pdfBase64,
+      },
+    });
 
     setPdfHistory((current) => {
       const deduped = current.filter((entry) => entry.filename !== nextItem.filename);
@@ -454,18 +522,46 @@ export default function HomePage() {
       writePdfHistory(next);
       return next;
     });
-  }, [assistantModel, pdfText, sourceLang, targetLang, translatedText, translationField, translationStatus.model, translationStatus.transport]);
+  }, [assistantModel, pdfBase64, pdfText, sourceLang, targetLang, translatedText, translationField, translationStatus.model, translationStatus.transport]);
+
+  useEffect(() => {
+    if (pdf2zhJob?.status !== 'done' || !pdf2zhJob.id) return;
+    if (lastSavedPdf2zhJobIdRef.current === pdf2zhJob.id) return;
+
+    lastSavedPdf2zhJobIdRef.current = pdf2zhJob.id;
+    setPdf2zhPreviewType('mono');
+    setTranslationPreviewMode('pdf2zh');
+    savePdfHistoryItem({
+      filename: pdfFile?.name || pdf2zhJob.filename || 'paper.pdf',
+      fileSize: pdfFile?.size || pdf2zhJob.fileSize || 0,
+      totalPages: pdfPages.length || 0,
+      pdfBase64,
+      originalText: pdfText,
+      translatedText,
+      status: 'pdf2zh',
+      transport: 'pdf2zh',
+      model: 'pdf2zh',
+      pdf2zhJob,
+      pdf2zhPreviewType: 'mono',
+    });
+  }, [pdf2zhJob, pdfBase64, pdfFile?.name, pdfFile?.size, pdfPages.length, pdfText, savePdfHistoryItem, translatedText]);
 
   const restorePdfHistoryItem = useCallback((item) => {
     setPdfFile({
       name: item.filename,
       size: item.fileSize || 0,
     });
-    setPdfBase64('');
+    setPdfBase64(item.pdfBase64 || '');
     setPdfText(item.originalText || '');
     setPdfPages(Array.from({ length: item.totalPages || 0 }, (_, index) => ({ pageNumber: index + 1, text: '' })));
     setTranslatedText(item.translatedText || '');
     setShowBilingual(Boolean(item.originalText && !item.translatedText));
+    setPdf2zhJob(item.pdf2zhJob || null);
+    setPdf2zhPreviewType(item.pdf2zhPreviewType || 'mono');
+    setTranslationPreviewMode(item.pdf2zhJob?.status === 'done' ? 'pdf2zh' : item.overlayPages?.length ? 'overlay' : 'text');
+    setOverlayPages(item.overlayPages || []);
+    setOverlayPageIndex(0);
+    setOverlayStatus(item.overlayStatus || (item.overlayPages?.length ? '已从历史记录恢复原位对照' : ''));
     setTranslationField(item.field || 'general');
     setSourceLang(item.sourceLang || 'en');
     setTargetLang(item.targetLang || 'zh');
@@ -473,13 +569,36 @@ export default function HomePage() {
     setTranslationStatus({
       stage: item.status === 'done' ? 'done' : 'parsed',
       progress: item.status === 'done' ? 100 : 0,
-      message: item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录',
+      message: item.overlayPages?.length
+        ? '已从历史记录恢复原位对照'
+        : item.pdfBase64
+          ? item.status === 'done' ? '已从历史记录恢复' : '已恢复历史 PDF 记录'
+          : item.originalText
+            ? '已恢复历史 PDF 文本，原始文件未保存时将使用文本翻译'
+            : '已恢复历史 PDF 记录',
       transport: item.transport || null,
       model: item.model || null,
       fallbackUsed: item.transport === 'text-fallback',
       fallbackLevel: item.transport === 'text-fallback' ? 3 : 0,
       fallbackReason: '',
     });
+  }, []);
+
+  const deleteRemotePdf2zhJob = useCallback(async (jobId) => {
+    if (!jobId) return null;
+
+    const response = await fetch(`/api/pdf2zh/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'DELETE',
+    });
+    const { payload, rawText } = await readApiPayload(response);
+    if (!response.ok || !payload.success) {
+      const message = formatApiError(response, payload, rawText, 'pdf2zh 文件删除失败');
+      if (!/not found|job not found|不存在|未找到/i.test(message)) {
+        throw new Error(message);
+      }
+    }
+
+    return payload;
   }, []);
 
   const renamePdfHistoryItem = useCallback((item) => {
@@ -497,15 +616,59 @@ export default function HomePage() {
     });
   }, []);
 
-  const deletePdfHistoryItem = useCallback((item) => {
+  const deletePdfHistoryItem = useCallback(async (item) => {
     if (!window.confirm(`删除处理记录“${item.filename}”？`)) return;
 
-    setPdfHistory((current) => {
-      const next = current.filter((entry) => entry.id !== item.id);
-      writePdfHistory(next);
-      return next;
-    });
-  }, []);
+    try {
+      if (item.pdf2zhJob?.id) {
+        await deleteRemotePdf2zhJob(item.pdf2zhJob.id);
+      }
+
+      setPdfHistory((current) => {
+        const next = current.filter((entry) => entry.id !== item.id);
+        writePdfHistory(next);
+        return next;
+      });
+
+      if (pdf2zhJob?.id === item.pdf2zhJob?.id) {
+        setPdf2zhJob(null);
+      }
+    } catch (error) {
+      setPdf2zhError(error.message);
+    }
+  }, [deleteRemotePdf2zhJob, pdf2zhJob?.id]);
+
+  const cleanupPdfHistoryGeneratedFiles = useCallback(async (item) => {
+    if (!item.pdf2zhJob?.id) return;
+    if (!window.confirm(`清理“${item.filename}”的排版 PDF 生成文件？历史记录会保留，但单语/双语 PDF 需要重新生成。`)) return;
+
+    try {
+      const payload = await deleteRemotePdf2zhJob(item.pdf2zhJob.id);
+      const deletedJobId = item.pdf2zhJob.id;
+      const bytesFreed = payload?.data?.result?.bytesFreed || payload?.result?.bytesFreed || 0;
+
+      setPdfHistory((current) => {
+        const next = current.map((entry) => (
+          entry.id === item.id
+            ? { ...entry, pdf2zhJob: null, updatedAt: new Date().toISOString() }
+            : entry
+        ));
+        writePdfHistory(next);
+        return next;
+      });
+
+      if (pdf2zhJob?.id === deletedJobId) {
+        setPdf2zhJob(null);
+        if (translationPreviewMode === 'pdf2zh') {
+          setTranslationPreviewMode(translatedText ? 'text' : 'overlay');
+        }
+      }
+
+      setPdf2zhError(bytesFreed ? `已清理生成文件，释放约 ${formatBytes(bytesFreed)}。` : '已清理生成文件。');
+    } catch (error) {
+      setPdf2zhError(error.message);
+    }
+  }, [deleteRemotePdf2zhJob, pdf2zhJob?.id, translatedText, translationPreviewMode]);
 
   const loadConversations = useCallback(async () => {
     try {
@@ -722,13 +885,20 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '保存模型配置失败'));
       }
 
-      setModelRegistry(payload.models || []);
-      setDefaultModelId(payload.defaultModel || defaultModelId);
+      const nextState = applyModelConfigSave({
+        assistantModel,
+        defaultModelId,
+        formModelId: modelForm.id,
+        payload,
+      });
+
+      setModelRegistry(nextState.models);
+      setDefaultModelId(nextState.defaultModelId);
       setModelsLoaded(true);
-      setAssistantModel(modelForm.id);
+      setAssistantModel(nextState.assistantModel);
       setModelForm(INITIAL_MODEL_FORM);
       setModelFormVisible(false);
-      setModelConfigMessage(payload.note ? `模型配置已保存。${payload.note}` : '模型配置已保存。');
+      setModelConfigMessage(nextState.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     } finally {
@@ -749,11 +919,17 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '设置默认模型失败'));
       }
 
-      setDefaultModelId(payload.defaultModel || modelId);
-      setModelRegistry(payload.models || []);
+      const nextState = applyDefaultModelUpdate({
+        assistantModel,
+        modelId,
+        payload,
+      });
+
+      setDefaultModelId(nextState.defaultModelId);
+      setModelRegistry(nextState.models);
       setModelsLoaded(true);
-      setAssistantModel(modelId);
-      setModelConfigMessage('默认模型已更新。');
+      setAssistantModel(nextState.assistantModel);
+      setModelConfigMessage(nextState.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     }
@@ -797,22 +973,17 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '模型测试失败'));
       }
 
-      const textMessage = payload.test?.text?.skipped
-        ? `文本未测试：${payload.test?.text?.message || '本次未测试'}`
-        : payload.test?.text?.success
-        ? `文本可用：${payload.test?.text?.message || '模型可用'}`
-        : `文本不可用：${payload.test?.text?.message || '测试失败'}`;
-      const visionMessage = payload.test?.vision?.skipped
-        ? `视觉未执行：${payload.test?.vision?.message || '未测试视觉能力'}`
-        : payload.test?.vision?.success
-          ? `视觉可用：${payload.test.vision.message}`
-          : `视觉不可用：${payload.test?.vision?.message || '测试失败'}`;
-
-      const independenceNote = payload.test?.text?.success && !payload.test?.vision?.success
-        ? '文本模型仍可用于写作、文献和文本翻译；视觉失败只影响图片页 PDF 翻译。'
-        : '';
-
-      setModelConfigMessage(`测试完成。${textMessage}；${visionMessage}${independenceNote ? `。${independenceNote}` : ''}`);
+      const feedback = createModelTestFeedback({ assistantModel, payload });
+      setAssistantModel(feedback.assistantModel);
+      setModelTestResults((current) => ({
+        ...current,
+        [modelId]: {
+          test: feedback.test,
+          message: feedback.message,
+          testedAt: new Date().toISOString(),
+        },
+      }));
+      setModelConfigMessage(feedback.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     } finally {
@@ -1047,6 +1218,13 @@ function editModel(model) {
     setIsUploading(true);
     setTranslationError('');
     setTranslatedText('');
+    setTranslationPreviewMode('text');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setOverlayStatus('');
+    setPdf2zhJob(null);
+    setPdf2zhLoading(false);
+    setPdf2zhError('');
     setTranslationStatus({
       stage: 'parsing',
       progress: 5,
@@ -1092,6 +1270,7 @@ function editModel(model) {
         filename: file.name,
         fileSize: file.size,
         totalPages: payload.data.totalPages,
+        pdfBase64: fileBase64,
         originalText: payload.data.text,
         status: 'parsed',
         transport: 'parsed',
@@ -1110,8 +1289,10 @@ function editModel(model) {
   }
 
   async function handleTranslate() {
-    if (!pdfBase64) {
-      setTranslationError('请先上传 PDF');
+    const useTextOnlyHistory = !pdfBase64 && Boolean(pdfText.trim());
+
+    if (!canTranslatePdfState({ pdfBase64, pdfText })) {
+      setTranslationError('请先上传 PDF，或载入包含解析文本的历史记录');
       return;
     }
 
@@ -1121,29 +1302,38 @@ function editModel(model) {
     setTranslationStatus({
       stage: 'uploading',
       progress: 10,
-      message: '准备开始翻译',
-      transport: null,
-      model: null,
-      fallbackUsed: false,
-      fallbackLevel: 0,
+      message: useTextOnlyHistory ? '历史记录缺少原始 PDF，准备使用文本翻译' : '准备开始翻译',
+      transport: useTextOnlyHistory ? 'text-fallback' : null,
+      model: useTextOnlyHistory ? assistantModel : null,
+      fallbackUsed: useTextOnlyHistory,
+      fallbackLevel: useTextOnlyHistory ? 3 : 0,
       fallbackReason: '',
     });
 
     try {
-      const response = await fetch('/api/translate-pdf', {
+      const response = await fetch(useTextOnlyHistory ? '/api/translate' : '/api/translate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pdfBase64,
-          filename: pdfFile?.name || 'paper.pdf',
-          extractedText: pdfText,
-          pages: pdfPages,
-          sourceLang,
-          targetLang,
-          field: translationField,
-          provider: assistantModel,
-          stream: true,
-        }),
+        body: JSON.stringify(useTextOnlyHistory
+          ? {
+            text: pdfText,
+            sourceLang,
+            targetLang,
+            field: translationField,
+            model: assistantModel,
+            stream: true,
+          }
+          : {
+            pdfBase64,
+            filename: pdfFile?.name || 'paper.pdf',
+            extractedText: pdfText,
+            pages: pdfPages,
+            sourceLang,
+            targetLang,
+            field: translationField,
+            provider: assistantModel,
+            stream: true,
+          }),
       });
 
       if (!response.ok) {
@@ -1180,10 +1370,10 @@ function editModel(model) {
               stage: payload.stage || current.stage,
               progress: typeof payload.progress === 'number' ? payload.progress : current.progress,
               message: payload.message || current.message,
-              transport: payload.meta?.transport || current.transport,
+              transport: payload.meta?.transport || (useTextOnlyHistory ? 'text-fallback' : current.transport),
               model: payload.meta?.model || current.model,
-              fallbackUsed: payload.meta?.fallbackUsed ?? current.fallbackUsed,
-              fallbackLevel: payload.meta?.fallbackLevel ?? current.fallbackLevel,
+              fallbackUsed: payload.meta?.fallbackUsed ?? (useTextOnlyHistory || current.fallbackUsed),
+              fallbackLevel: payload.meta?.fallbackLevel ?? (useTextOnlyHistory ? 3 : current.fallbackLevel),
               fallbackReason: payload.meta?.fallbackReason || current.fallbackReason,
             }));
           }
@@ -1194,10 +1384,11 @@ function editModel(model) {
               filename: pdfFile?.name || 'paper.pdf',
               fileSize: pdfFile?.size || 0,
               totalPages: pdfPages.length,
+              pdfBase64,
               originalText: pdfText,
               translatedText: payload.data.translation,
               status: 'done',
-              transport: payload.meta?.transport || translationStatus.transport || 'text-fallback',
+              transport: payload.meta?.transport || (useTextOnlyHistory ? 'text-fallback' : translationStatus.transport) || 'text-fallback',
               model: payload.meta?.model || translationStatus.model || assistantModel,
             });
           }
@@ -1212,6 +1403,196 @@ function editModel(model) {
       }));
     } finally {
       setIsTranslating(false);
+    }
+  }
+
+  async function handleGenerateOverlay() {
+    if (!pdfBase64) {
+      setTranslationError('请先上传 PDF');
+      return;
+    }
+
+    setTranslationPreviewMode('overlay');
+    setOverlayLoading(true);
+    setOverlayTranslating(false);
+    setOverlayStatus('正在识别页面文字框');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setTranslationError('');
+    setTranslationStatus({
+      stage: 'overlay-ocr',
+      progress: 15,
+      message: '正在生成原位对照 OCR',
+      transport: 'overlay',
+      model: currentModel?.label || assistantModel || null,
+      fallbackUsed: false,
+      fallbackLevel: 0,
+      fallbackReason: '',
+    });
+
+    try {
+      const ocrResponse = await fetch('/api/pdf/overlay-ocr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfBase64,
+          filename: pdfFile?.name || 'paper.pdf',
+          provider: assistantModel,
+          engine: 'auto',
+          pageLimit: overlayPageLimit === 'all' ? 'all' : 1,
+        }),
+      });
+      const { payload: ocrPayload, rawText: ocrRawText } = await readApiPayload(ocrResponse);
+
+      if (!ocrResponse.ok || !ocrPayload.success) {
+        throw new Error(formatApiError(ocrResponse, ocrPayload, ocrRawText, '原位 OCR 失败'));
+      }
+
+      const recognizedPages = ocrPayload.data?.pages || [];
+      const blockCount = recognizedPages.reduce((sum, page) => sum + (page.blocks?.length || 0), 0);
+      const totalPages = ocrPayload.data?.totalPages || recognizedPages.length;
+      const pageScope = recognizedPages.length < totalPages
+        ? `前 ${recognizedPages.length}/${totalPages} 页`
+        : `${recognizedPages.length} 页`;
+      setOverlayPages(recognizedPages);
+      setOverlayStatus(`已识别${pageScope}、${blockCount} 个文本块，正在生成译文覆盖层`);
+      setOverlayLoading(false);
+      setOverlayTranslating(true);
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'overlay-translate',
+        progress: 55,
+        message: `已识别${pageScope}、${blockCount} 个文本块，正在翻译覆盖层`,
+        model: ocrPayload.meta?.model || current.model,
+      }));
+
+      const translateResponse = await fetch('/api/translate-overlay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pages: recognizedPages,
+          sourceLang,
+          targetLang,
+          field: translationField,
+          provider: assistantModel,
+        }),
+      });
+      const { payload: translatePayload, rawText: translateRawText } = await readApiPayload(translateResponse);
+
+      if (!translateResponse.ok || !translatePayload.success) {
+        throw new Error(formatApiError(translateResponse, translatePayload, translateRawText, '原位覆盖翻译失败'));
+      }
+
+      const translatedPages = translatePayload.data?.pages || recognizedPages;
+      setOverlayPages(translatedPages);
+      setOverlayStatus('原位对照已生成');
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'overlay-done',
+        progress: 100,
+        message: '原位对照已生成',
+        model: translatePayload.meta?.model || current.model,
+      }));
+      savePdfHistoryItem({
+        filename: pdfFile?.name || 'paper.pdf',
+        fileSize: pdfFile?.size || 0,
+        totalPages: pdfPages.length || translatedPages.length,
+        pdfBase64,
+        originalText: pdfText,
+        translatedText,
+        status: 'overlay',
+        transport: 'overlay',
+        model: translatePayload.meta?.model || ocrPayload.meta?.model || assistantModel,
+        overlayPages: translatedPages,
+        overlayStatus: '原位对照已生成',
+      });
+    } catch (error) {
+      setTranslationError(error.message);
+      setOverlayStatus(error.message);
+      setTranslationStatus((current) => ({
+        ...current,
+        stage: 'error',
+        progress: Math.max(current.progress, 15),
+        message: '原位对照生成失败',
+        fallbackReason: error.message,
+      }));
+    } finally {
+      setOverlayLoading(false);
+      setOverlayTranslating(false);
+    }
+  }
+
+  async function handleStartPdf2zh() {
+    if (!pdfBase64) {
+      setPdf2zhError('当前记录没有保存原始 PDF，请重新上传 PDF 后再启动排版翻译。');
+      return;
+    }
+
+    setPdf2zhLoading(true);
+    setPdf2zhError('');
+    lastSavedPdf2zhJobIdRef.current = '';
+    setPdf2zhPreviewType('mono');
+    setTranslationPreviewMode('pdf2zh');
+    setPdf2zhJob({
+      id: '',
+      status: 'submitting',
+      stage: 'submitting',
+      progress: 0,
+      filename: pdfFile?.name || 'paper.pdf',
+    });
+
+    try {
+      const response = await fetch('/api/pdf2zh/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfBase64,
+          filename: pdfFile?.name || 'paper.pdf',
+          sourceLang,
+          targetLang,
+          mode: 'dual',
+          pages: 'all',
+        }),
+      });
+      const { payload, rawText } = await readApiPayload(response);
+
+      if (!response.ok || !payload.success) {
+        throw new Error(formatApiError(response, payload, rawText, 'pdf2zh 任务提交失败'));
+      }
+
+      setPdf2zhJob(payload.data.job);
+    } catch (error) {
+      setPdf2zhError(error.message);
+      setPdf2zhJob(null);
+    } finally {
+      setPdf2zhLoading(false);
+    }
+  }
+
+  async function handleDeleteCurrentPdf2zhJob() {
+    if (!pdf2zhJob?.id) return;
+    if (!window.confirm('删除当前排版翻译生成的 PDF 文件？这会释放服务器存储空间。')) return;
+
+    try {
+      const payload = await deleteRemotePdf2zhJob(pdf2zhJob.id);
+      const deletedJobId = pdf2zhJob.id;
+      const bytesFreed = payload?.data?.result?.bytesFreed || payload?.result?.bytesFreed || 0;
+      setPdf2zhJob(null);
+      setPdf2zhError(bytesFreed ? `已删除当前排版 PDF 文件，释放约 ${formatBytes(bytesFreed)}。` : '已删除当前排版 PDF 文件。');
+      if (translationPreviewMode === 'pdf2zh') {
+        setTranslationPreviewMode(translatedText ? 'text' : 'overlay');
+      }
+      setPdfHistory((current) => {
+        const next = current.map((entry) => (
+          entry.pdf2zhJob?.id === deletedJobId
+            ? { ...entry, pdf2zhJob: null, updatedAt: new Date().toISOString() }
+            : entry
+        ));
+        writePdfHistory(next);
+        return next;
+      });
+    } catch (error) {
+      setPdf2zhError(error.message);
     }
   }
 
@@ -1268,6 +1649,14 @@ function editModel(model) {
     setTranslatedText('');
     setTranslationError('');
     setShowBilingual(false);
+    setTranslationPreviewMode('text');
+    setOverlayPages([]);
+    setOverlayPageIndex(0);
+    setOverlayVisible(true);
+    setOverlayStatus('');
+    setPdf2zhJob(null);
+    setPdf2zhLoading(false);
+    setPdf2zhError('');
     setTranslationStatus(INITIAL_TRANSLATION_STATUS);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -1620,6 +2009,9 @@ function editModel(model) {
                           <div style={{ display: 'flex', gap: 10 }}>
                             <button type="button" onClick={() => restorePdfHistoryItem(item)} style={plainTextButtonStyle()}>载入</button>
                             <button type="button" onClick={() => renamePdfHistoryItem(item)} style={plainTextButtonStyle()}>重命名</button>
+                            {item.pdf2zhJob?.id && (
+                              <button type="button" onClick={() => cleanupPdfHistoryGeneratedFiles(item)} style={plainTextButtonStyle()}>清理文件</button>
+                            )}
                             <button type="button" onClick={() => deletePdfHistoryItem(item)} style={plainTextButtonStyle()}>删除</button>
                           </div>
                         </div>
@@ -1686,6 +2078,98 @@ function editModel(model) {
                 </div>
 
                 <div style={subsectionStyle()}>
+                  <div style={subsectionTitleStyle()}>原位对照</div>
+                  <ContextRow label="状态" value={overlayStatus || '未生成'} />
+                  <ContextRow label="页数" value={overlayPages.length ? `${overlayPages.length} 页` : '—'} />
+                  <ContextRow label="译文层" value={overlayVisible ? '显示' : '隐藏'} />
+                  <label style={fieldLabelStyle()}>
+                    识别范围
+                    <select
+                      value={overlayPageLimit}
+                      onChange={(event) => setOverlayPageLimit(event.target.value)}
+                      style={selectStyle()}
+                      disabled={overlayLoading || overlayTranslating}
+                    >
+                      <option value="one">先看 1 页</option>
+                      <option value="all">全部页面</option>
+                    </select>
+                  </label>
+                  <button
+                    onClick={handleGenerateOverlay}
+                    disabled={overlayLoading || overlayTranslating || !pdfBase64}
+                    style={primaryButtonStyle(!(overlayLoading || overlayTranslating || !pdfBase64))}
+                  >
+                    {overlayLoading ? '识别中…' : overlayTranslating ? '覆盖翻译中…' : '生成原位对照'}
+                  </button>
+                </div>
+
+                <div style={subsectionStyle()}>
+                  <div style={subsectionTitleStyle()}>排版翻译</div>
+                  <ContextRow label="引擎" value="pdf2zh" />
+                  <ContextRow label="状态" value={pdf2zhStatusLabel} />
+                  <ContextRow label="进度" value={pdf2zhJob?.progress != null ? `${Math.round(pdf2zhJob.progress)}%` : '—'} />
+                  <div style={infoNoteStyle()}>
+                    排版 PDF 适合快速导出。双语版会按“原文页 / 译文页”交替排列，不是同页双栏；含水印或复杂图表的论文建议优先检查单语版。
+                  </div>
+                  {pdf2zhJob?.error && (
+                    <div style={errorNoteStyle()}>{pdf2zhJob.error}</div>
+                  )}
+                  {pdf2zhError && (
+                    <div style={errorNoteStyle()}>{pdf2zhError}</div>
+                  )}
+                  <button
+                    onClick={handleStartPdf2zh}
+                    disabled={pdf2zhLoading || ['queued', 'running'].includes(pdf2zhJob?.status)}
+                    style={primaryButtonStyle(!(pdf2zhLoading || ['queued', 'running'].includes(pdf2zhJob?.status)))}
+                  >
+                    {pdf2zhLoading ? '提交中…' : '生成排版 PDF'}
+                  </button>
+                  {pdf2zhCanDownload && (
+                    <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdf2zhPreviewType('mono');
+                            setTranslationPreviewMode('pdf2zh');
+                          }}
+                          style={segmentButtonStyle(pdf2zhPreviewType === 'mono' && translationPreviewMode === 'pdf2zh')}
+                        >
+                          预览单语
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdf2zhPreviewType('dual');
+                            setTranslationPreviewMode('pdf2zh');
+                          }}
+                          style={segmentButtonStyle(pdf2zhPreviewType === 'dual' && translationPreviewMode === 'pdf2zh')}
+                        >
+                          预览双语
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <a
+                          href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=mono`}
+                          style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                        >
+                          下载单语
+                        </a>
+                        <a
+                          href={`/api/pdf2zh/jobs/${encodeURIComponent(pdf2zhJob.id)}/download?type=dual`}
+                          style={{ ...secondaryButtonStyle(), textAlign: 'center' }}
+                        >
+                          下载双语
+                        </a>
+                      </div>
+                      <button type="button" onClick={handleDeleteCurrentPdf2zhJob} style={secondaryButtonStyle()}>
+                        删除生成文件
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div style={subsectionStyle()}>
                   <div style={subsectionTitleStyle()}>导出</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                     <button onClick={() => setExportFormat('docx')} style={segmentButtonStyle(exportFormat === 'docx')}>Word</button>
@@ -1713,6 +2197,15 @@ function editModel(model) {
                     <div style={{ fontSize: 24, fontWeight: 700 }}>翻译预览</div>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => setTranslationPreviewMode('text')} style={segmentButtonStyle(translationPreviewMode === 'text')}>
+                      正文译文
+                    </button>
+                    <button onClick={() => setTranslationPreviewMode('overlay')} style={segmentButtonStyle(translationPreviewMode === 'overlay')}>
+                      原位对照
+                    </button>
+                    <button onClick={() => setTranslationPreviewMode('pdf2zh')} style={segmentButtonStyle(translationPreviewMode === 'pdf2zh')}>
+                      排版 PDF
+                    </button>
                     <button onClick={() => setShowBilingual((current) => !current)} style={secondaryButtonStyle()}>
                       {showBilingual ? '仅看译文' : '原文 / 译文'}
                     </button>
@@ -1723,7 +2216,23 @@ function editModel(model) {
                 </header>
 
                 <div style={previewSurfaceStyle()}>
-                  {!hasTranslationOutput && pdfText.trim() ? (
+                  {translationPreviewMode === 'pdf2zh' ? (
+                    <Pdf2zhPreview
+                      job={pdf2zhJob}
+                      previewType={pdf2zhPreviewType}
+                      setPreviewType={setPdf2zhPreviewType}
+                    />
+                  ) : translationPreviewMode === 'overlay' ? (
+                    <OverlayPreview
+                      pages={overlayPages}
+                      pageIndex={overlayPageIndex}
+                      setPageIndex={setOverlayPageIndex}
+                      overlayVisible={overlayVisible}
+                      setOverlayVisible={setOverlayVisible}
+                      loading={overlayLoading || overlayTranslating}
+                      status={overlayStatus}
+                    />
+                  ) : !hasTranslationOutput && pdfText.trim() ? (
                     <PreviewBlock title="原文" content={pdfText} />
                   ) : !hasTranslationOutput ? (
                     <div style={{ color: 'var(--text3)', lineHeight: 1.8 }}>
@@ -1784,61 +2293,40 @@ function editModel(model) {
                 <div style={{ fontSize: 26, fontWeight: 700 }}>工作台设置</div>
               </div>
               <button onClick={() => setModelFormVisible((current) => !current)} style={secondaryButtonStyle()}>
-                {modelFormVisible ? '收起新增模型' : '新增模型'}
+                {modelFormVisible ? '收起配置面板' : '新增模型'}
               </button>
             </header>
 
             <div style={{ display: 'grid', gap: 14, overflowY: 'auto', minHeight: 0, paddingRight: 4 }}>
-              <SettingsSection title="默认模型">
-                <div style={{ display: 'grid', gap: 8 }}>
+              <SettingsSection title="模型配置中心">
+                <div style={modelSummaryGridStyle()}>
+                  <ModelSummaryCard label="当前使用" value={currentModel?.label || assistantModel || '未选择'} detail={currentModelStatus} />
+                  <ModelSummaryCard label="默认模型" value={defaultModel?.label || defaultModelId || '未设置'} detail="不会自动切换当前会话" />
+                  <ModelSummaryCard label="可调用模型" value={`${configuredModels.length} / ${modelRegistry.length}`} detail="文本能力可用于写作与翻译" />
+                  <ModelSummaryCard label="视觉能力" value={`${visionReadyModels.length} 个`} detail="影响图片页 PDF 翻译" />
+                </div>
+
+                <div style={modelCardGridStyle()}>
                   {modelRegistry.map((item) => (
-                    <div key={item.id} style={settingOptionStyle(item.id === assistantModel)}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{item.label}</div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            {item.source === 'custom' ? '自定义模型' : item.provider} · {item.apiStyle || 'chat-completions'} · {item.configured ? '已配置' : '未配置'}
-                          </div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            文本模型：{item.textModel || '未填写'}{item.supportsVision ? ` · 视觉模型：${item.visionModel || '未填写'}` : ''}
-                          </div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            文本：{item.textConfigured || item.configured ? '可用' : '待配置'} · 视觉：{item.supportsVision ? (item.visionConfigured ? '可用' : '独立待配置') : '未启用'}
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button onClick={() => setAssistantModel(item.id)} style={secondaryButtonStyle()}>
-                            当前使用
-                          </button>
-                          <button onClick={() => chooseDefaultModel(item.id)} style={secondaryButtonStyle()}>
-                            {defaultModelId === item.id ? '默认模型' : '设为默认'}
-                          </button>
-                          <button onClick={() => testModel(item.id, 'text')} disabled={modelTestingId === `${item.id}:text`} style={secondaryButtonStyle()}>
-                            {modelTestingId === `${item.id}:text` ? '测试中…' : '测试文本'}
-                          </button>
-                          {item.supportsVision && (
-                            <button onClick={() => testModel(item.id, 'vision')} disabled={modelTestingId === `${item.id}:vision`} style={secondaryButtonStyle()}>
-                              {modelTestingId === `${item.id}:vision` ? '测试中…' : '测试视觉'}
-                            </button>
-                          )}
-                          <button onClick={() => testModel(item.id, 'both')} disabled={modelTestingId === `${item.id}:both`} style={secondaryButtonStyle()}>
-                            {modelTestingId === `${item.id}:both` ? '测试中…' : '测试全部'}
-                          </button>
-                          <button onClick={() => editModel(item)} style={secondaryButtonStyle()}>
-                            修改配置
-                          </button>
-                          <button onClick={() => removeCustomModel(item.id)} style={secondaryButtonStyle()}>
-                            {item.source === 'builtin' ? '清除覆盖' : '删除'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <ModelConfigCard
+                      key={item.id}
+                      model={item}
+                      active={item.id === assistantModel}
+                      defaultModel={item.id === defaultModelId}
+                      testing={modelTestingId === `${item.id}:both`}
+                      testResult={modelTestResults[item.id]}
+                      onUse={() => setAssistantModel(item.id)}
+                      onSetDefault={() => chooseDefaultModel(item.id)}
+                      onTest={() => testModel(item.id, 'both')}
+                      onEdit={() => editModel(item)}
+                      onRemove={() => removeCustomModel(item.id)}
+                    />
                   ))}
                 </div>
               </SettingsSection>
 
               {modelFormVisible && (
-                <SettingsSection title="新增 OpenAI 兼容模型">
+                <SettingsSection title="新增 / 编辑 OpenAI 兼容模型">
                   <form onSubmit={saveModelConfig} style={{ display: 'grid', gap: 10 }}>
                     <div style={settingsGridStyle()}>
                       <label style={fieldStackStyle()}>
@@ -1909,9 +2397,9 @@ function editModel(model) {
                 </div>
               </SettingsSection>
 
-              <SettingsSection title="模型配置状态">
+              <SettingsSection title="测试与配置反馈">
                 <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
-                    当前共识别到 {modelRegistry.length} 个模型，其中 {configuredModels.length} 个已配置可调用。写作和翻译会优先使用“当前使用”模型，PDF 视觉翻译会自动寻找具备视觉能力的模型。
+                  当前共识别到 {modelRegistry.length} 个模型，其中 {configuredModels.length} 个已配置可调用。点击卡片右侧测试图标只会测试连通性，不会切换当前模型。
                 </div>
                 {modelConfigMessage && (
                   <div style={{ marginTop: 10, ...infoNoteStyle(missingModelConfig ? 'warn' : 'neutral') }}>
@@ -1975,6 +2463,150 @@ function PreviewBlock({ title, content }) {
   );
 }
 
+function Pdf2zhPreview({ job, previewType, setPreviewType }) {
+  const isDone = job?.status === 'done' && job.id;
+  const safeType = previewType === 'dual' ? 'dual' : 'mono';
+  const previewUrl = isDone
+    ? `/api/pdf2zh/jobs/${encodeURIComponent(job.id)}/download?type=${safeType}&inline=1`
+    : '';
+
+  if (!job) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>排版 PDF</div>
+        <div>点击左侧“生成排版 PDF”，完成后可在这里直接预览单语或双语 PDF。</div>
+      </div>
+    );
+  }
+
+  if (!isDone) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>排版 PDF</div>
+        <div>{job.status === 'failed' ? (job.error || '排版翻译失败') : `正在处理：${job.stage || job.status || '排队中'}，${Math.round(job.progress || 0)}%`}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={pdf2zhPreviewWrapStyle()}>
+      <div style={overlayToolbarStyle()}>
+        <div>
+          <div style={{ fontWeight: 700 }}>排版 PDF 预览</div>
+          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+            双语 PDF 为原文页与译文页交替显示；若要快速检查翻译完整性，建议先看单语 PDF。
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button type="button" onClick={() => setPreviewType('mono')} style={segmentButtonStyle(safeType === 'mono')}>
+            单语
+          </button>
+          <button type="button" onClick={() => setPreviewType('dual')} style={segmentButtonStyle(safeType === 'dual')}>
+            双语
+          </button>
+          <a
+            href={`/api/pdf2zh/jobs/${encodeURIComponent(job.id)}/download?type=${safeType}`}
+            style={{ ...secondaryButtonStyle(), textDecoration: 'none' }}
+          >
+            下载当前 PDF
+          </a>
+        </div>
+      </div>
+      <iframe
+        title={`pdf2zh-${safeType}-preview`}
+        src={previewUrl}
+        style={pdf2zhIframeStyle()}
+      />
+    </div>
+  );
+}
+
+function OverlayPreview({
+  pages,
+  pageIndex,
+  setPageIndex,
+  overlayVisible,
+  setOverlayVisible,
+  loading,
+  status,
+}) {
+  const safeIndex = Math.min(Math.max(pageIndex, 0), Math.max(pages.length - 1, 0));
+  const page = pages[safeIndex];
+
+  if (!page) {
+    return (
+      <div style={overlayEmptyStyle()}>
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 8 }}>原位对照</div>
+        <div>{loading ? (status || '正在生成原位对照…') : '点击左侧“生成原位对照”，这里会显示原页图片和译文覆盖层。'}</div>
+      </div>
+    );
+  }
+
+  const visibleBlocks = (page.blocks || []).filter(shouldRenderOverlayBlock);
+
+  return (
+    <div style={overlayPreviewWrapStyle()}>
+      <div style={overlayToolbarStyle()}>
+        <div>{status || `第 ${page.pageNumber} 页`}</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setOverlayVisible((current) => !current)}
+            style={secondaryButtonStyle()}
+          >
+            {overlayVisible ? '隐藏译文层' : '显示译文层'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPageIndex(Math.max(0, safeIndex - 1))}
+            disabled={safeIndex === 0}
+            style={secondaryButtonStyle()}
+          >
+            上一页
+          </button>
+          <span style={{ color: 'var(--text3)' }}>{safeIndex + 1} / {pages.length}</span>
+          <button
+            type="button"
+            onClick={() => setPageIndex(Math.min(pages.length - 1, safeIndex + 1))}
+            disabled={safeIndex >= pages.length - 1}
+            style={secondaryButtonStyle()}
+          >
+            下一页
+          </button>
+        </div>
+      </div>
+
+      <div style={overlayCanvasStyle(page)}>
+        <img src={page.imageUrl} alt={`PDF page ${page.pageNumber}`} style={overlayImageStyle(overlayVisible)} />
+        {overlayVisible && (
+          <div style={overlayLayerStyle()}>
+            {visibleBlocks.map((block) => (
+              <div key={block.id} style={overlayBoxStyle(block, page)} title={block.text}>
+                {formatOverlayText(block.translatedText || block.text)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function shouldRenderOverlayBlock(block) {
+  if (!block || block.preserveOriginal) return false;
+  if (block.type === 'formula' || block.type === 'reference') return false;
+
+  const source = String(block.text || '').trim();
+  const translated = String(block.translatedText || '').trim();
+  return Boolean(translated && translated !== source);
+}
+
+function formatOverlayText(text = '') {
+  return cleanPreviewText(text)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function PreviewParagraph({ block }) {
   if (block.type === 'title') {
     return <h2 style={previewTitleStyle()}>{block.text}</h2>;
@@ -2018,6 +2650,187 @@ function PreviewTable({ rows = [] }) {
       </table>
     </div>
   );
+}
+
+function ModelSummaryCard({ label, value, detail }) {
+  return (
+    <div style={modelSummaryCardStyle()}>
+      <div style={{ color: 'var(--text3)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{value}</div>
+      <div style={{ marginTop: 6, color: 'var(--text3)', fontSize: 12, lineHeight: 1.5 }}>{detail}</div>
+    </div>
+  );
+}
+
+function ModelConfigCard({
+  model,
+  active,
+  defaultModel,
+  testing,
+  testResult,
+  onUse,
+  onSetDefault,
+  onTest,
+  onEdit,
+  onRemove,
+}) {
+  const sourceLabel = model.source === 'custom' ? '自定义' : '系统';
+  const textAvailable = Boolean(model.textConfigured || model.configured);
+  const visionLabel = model.supportsVision
+    ? model.visionConfigured ? '视觉可用' : '视觉待配置'
+    : '未启用视觉';
+  const testTone = testResult?.test?.text?.success && (testResult.test?.vision?.success || testResult.test?.vision?.skipped)
+    ? 'ok'
+    : 'neutral';
+
+  return (
+    <article style={modelCardStyle(active)}>
+      <div style={modelCardTopStyle()}>
+        <div style={{ minWidth: 0 }}>
+          <div style={modelCardTitleRowStyle()}>
+            <span style={modelAvatarStyle(model.label)}>{getModelInitial(model.label)}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {model.label}
+              </div>
+              <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                {sourceLabel} · {model.provider || 'openai-compatible'} · {model.apiStyle || 'chat-completions'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={modelActionBarStyle()}>
+          <ModelIconButton title={active ? '当前正在使用' : '设为当前使用'} disabled={active} active={active} onClick={onUse}>
+            <ModelIcon name="target" />
+          </ModelIconButton>
+          <ModelIconButton title={defaultModel ? '默认模型' : '设为默认模型'} disabled={defaultModel} active={defaultModel} onClick={onSetDefault}>
+            <ModelIcon name="star" />
+          </ModelIconButton>
+          <ModelIconButton title="测试模型（文本与视觉）" disabled={testing} onClick={onTest}>
+            {testing ? <span style={{ fontWeight: 800 }}>…</span> : <ModelIcon name="pulse" />}
+          </ModelIconButton>
+          <ModelIconButton title="修改配置" onClick={onEdit}>
+            <ModelIcon name="edit" />
+          </ModelIconButton>
+          <ModelIconButton title={model.source === 'builtin' ? '清除自定义覆盖' : '删除模型'} danger onClick={onRemove}>
+            <ModelIcon name="trash" />
+          </ModelIconButton>
+        </div>
+      </div>
+
+      <div style={modelBadgeRowStyle()}>
+        {active && <ModelStatusPill tone="accent">当前使用</ModelStatusPill>}
+        {defaultModel && <ModelStatusPill tone="warm">默认</ModelStatusPill>}
+        <ModelStatusPill tone={model.configured ? 'ok' : 'muted'}>{model.configured ? '已配置' : '未配置'}</ModelStatusPill>
+        <ModelStatusPill tone={textAvailable ? 'ok' : 'muted'}>{textAvailable ? '文本可用' : '文本待配置'}</ModelStatusPill>
+        <ModelStatusPill tone={model.visionConfigured ? 'ok' : 'muted'}>{visionLabel}</ModelStatusPill>
+      </div>
+
+      <div style={modelSpecGridStyle()}>
+        <ModelSpec label="文本模型" value={model.textModel || '未填写'} />
+        <ModelSpec label="视觉模型" value={model.supportsVision ? (model.visionModel || '未填写') : '未启用'} />
+      </div>
+
+      {testResult?.message && (
+        <div style={modelTestResultStyle(testTone)}>
+          <div>{testResult.message}</div>
+          <div style={{ marginTop: 6, color: 'var(--text3)', fontSize: 11 }}>
+            最近测试：{formatTimeLabel(testResult.testedAt)}
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ModelSpec({ label, value }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 5 }}>{label}</div>
+      <div style={{ color: 'var(--text2)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={value}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ModelStatusPill({ tone = 'muted', children }) {
+  return <span style={modelStatusPillStyle(tone)}>{children}</span>;
+}
+
+function ModelIconButton({ title, disabled = false, active = false, danger = false, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={modelIconButtonStyle({ active, danger, disabled })}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ModelIcon({ name }) {
+  if (name === 'star') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 3.8 14.7 9l5.8.8-4.2 4.1 1 5.8L12 17l-5.2 2.7 1-5.8-4.2-4.1L9.3 9 12 3.8Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'pulse') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 12h4l2-5 4 10 2-5h4" />
+      </svg>
+    );
+  }
+
+  if (name === 'edit') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 19h4.2L18.4 9.8a2.1 2.1 0 0 0 0-3L17.2 5.6a2.1 2.1 0 0 0-3 0L5 14.8V19Z" />
+        <path d="m13.5 6.5 3 3" />
+      </svg>
+    );
+  }
+
+  if (name === 'trash') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 7h14" />
+        <path d="M9 7V5h6v2" />
+        <path d="M8 10v8" />
+        <path d="M12 10v8" />
+        <path d="M16 10v8" />
+        <path d="M7 7l1 15h8l1-15" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M2 12h3" />
+      <path d="M19 12h3" />
+    </svg>
+  );
+}
+
+function getModelInitial(label = '') {
+  const trimmed = String(label).trim();
+  if (!trimmed) return 'M';
+  return trimmed.slice(0, 1).toUpperCase();
 }
 
 function SettingsSection({ title, children }) {
@@ -2069,8 +2882,18 @@ function pdfHistoryTransportLabel(transport) {
   if (transport === 'ark-file') return '直传';
   if (transport === 'page-images') return '视觉';
   if (transport === 'text-fallback') return '文本';
+  if (transport === 'pdf2zh') return '排版';
   if (transport === 'parsed') return '已解析';
   return '记录';
+}
+
+function formatBytes(value = 0) {
+  const bytes = Number(value) || 0;
+  if (bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function shortReason(reason = '') {
@@ -2757,6 +3580,129 @@ function previewDocumentStyle() {
   };
 }
 
+function pdf2zhPreviewWrapStyle() {
+  return {
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(520px, 1fr)',
+    gap: 14,
+    minWidth: 0,
+    height: '100%',
+  };
+}
+
+function pdf2zhIframeStyle() {
+  return {
+    width: '100%',
+    height: '100%',
+    minHeight: 620,
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    background: '#fff',
+  };
+}
+
+function overlayEmptyStyle() {
+  return {
+    display: 'grid',
+    placeContent: 'center',
+    minHeight: 420,
+    color: 'var(--text3)',
+    textAlign: 'center',
+    lineHeight: 1.8,
+  };
+}
+
+function overlayPreviewWrapStyle() {
+  return {
+    display: 'grid',
+    gap: 14,
+    minWidth: 0,
+    height: '100%',
+  };
+}
+
+function overlayToolbarStyle() {
+  return {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    color: 'var(--text2)',
+    fontSize: 12,
+  };
+}
+
+function overlayCanvasStyle(page) {
+  return {
+    position: 'relative',
+    width: '100%',
+    maxWidth: page?.width ? Math.min(page.width, 1180) : 1180,
+    margin: '0 auto',
+    border: '1px solid var(--border)',
+    borderRadius: 10,
+    overflow: 'hidden',
+    background: '#fff',
+    boxShadow: '0 12px 30px rgba(45, 38, 28, 0.08)',
+    aspectRatio: page?.width && page?.height ? `${page.width} / ${page.height}` : undefined,
+  };
+}
+
+function overlayImageStyle(isDimmed) {
+  return {
+    display: 'block',
+    width: '100%',
+    maxHeight: 'none',
+    objectFit: 'contain',
+    opacity: isDimmed ? 0.48 : 1,
+    transition: 'opacity .18s ease',
+  };
+}
+
+function overlayLayerStyle() {
+  return {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+  };
+}
+
+function overlayBoxStyle(block, page) {
+  const bbox = block.bbox || {};
+  const pageWidth = page?.width || 1;
+  const pageHeight = page?.height || 1;
+  const isTitle = block.type === 'title';
+  const area = Number(bbox.width || pageWidth) * Number(bbox.height || 1);
+  const textLength = String(block.translatedText || block.text || '').length;
+  const density = area ? textLength / area : 0;
+  const boxHeight = Number(bbox.height || 1);
+  const fontSize = isTitle
+    ? Math.max(10, Math.min(15, boxHeight * 0.32))
+    : Math.max(7.5, Math.min(11, density > 0.026 ? boxHeight * 0.12 : boxHeight * 0.16));
+
+  return {
+    position: 'absolute',
+    left: `${(Number(bbox.x || 0) / pageWidth) * 100}%`,
+    top: `${(Number(bbox.y || 0) / pageHeight) * 100}%`,
+    width: `${(Number(bbox.width || pageWidth) / pageWidth) * 100}%`,
+    height: `${(Number(bbox.height || 1) / pageHeight) * 100}%`,
+    padding: isTitle ? '3px 6px' : '2px 5px',
+    borderRadius: 4,
+    border: '1px solid rgba(84, 72, 55, 0.18)',
+    background: isTitle ? 'rgba(255, 255, 255, 0.98)' : 'rgba(255, 255, 255, 0.96)',
+    color: '#1f2933',
+    fontSize,
+    lineHeight: isTitle ? 1.18 : 1.22,
+    fontWeight: isTitle ? 700 : 500,
+    overflow: 'auto',
+    overflowWrap: 'break-word',
+    wordBreak: 'normal',
+    textAlign: 'left',
+    boxShadow: '0 3px 10px rgba(30, 25, 18, 0.10)',
+    backdropFilter: 'blur(1.5px)',
+    scrollbarWidth: 'none',
+  };
+}
+
 function previewTitleStyle() {
   return {
     margin: '4px 0 18px',
@@ -2892,16 +3838,161 @@ function settingsSectionStyle() {
   };
 }
 
-function settingOptionStyle(active) {
+function modelSummaryGridStyle() {
   return {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '10px 12px',
-    borderRadius: 8,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: 10,
+    marginBottom: 14,
+  };
+}
+
+function modelSummaryCardStyle() {
+  return {
+    padding: 14,
+    borderRadius: 10,
+    border: '1px solid var(--border)',
+    background: 'linear-gradient(180deg, #fffefc 0%, var(--surface2) 100%)',
+    minWidth: 0,
+  };
+}
+
+function modelCardGridStyle() {
+  return {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 12,
+  };
+}
+
+function modelCardStyle(active) {
+  return {
+    display: 'grid',
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
     border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
     background: active ? 'var(--accent-bg)' : 'var(--surface)',
-    fontSize: 13,
-    fontWeight: 600,
+    boxShadow: active ? '0 10px 26px rgba(55, 83, 112, 0.08)' : 'none',
+    minWidth: 0,
+  };
+}
+
+function modelCardTopStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  };
+}
+
+function modelCardTitleRowStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  };
+}
+
+function modelAvatarStyle() {
+  return {
+    width: 34,
+    height: 34,
+    flexShrink: 0,
+    borderRadius: 10,
+    border: '1px solid var(--accent-border)',
+    background: 'var(--surface3)',
+    color: 'var(--accent)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 14,
+    fontWeight: 800,
+  };
+}
+
+function modelActionBarStyle() {
+  return {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+    flexShrink: 0,
+  };
+}
+
+function modelIconButtonStyle({ active = false, danger = false, disabled = false } = {}) {
+  return {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
+    background: active ? 'var(--surface3)' : 'var(--surface)',
+    color: danger ? 'var(--red)' : active ? 'var(--accent)' : 'var(--text2)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: disabled ? 0.58 : 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    padding: 0,
+  };
+}
+
+function modelBadgeRowStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  };
+}
+
+function modelStatusPillStyle(tone = 'muted') {
+  const palette = {
+    accent: ['var(--accent-bg)', 'var(--accent-border)', 'var(--accent)'],
+    warm: ['#f8efe2', '#e0c9a6', '#7b5a22'],
+    ok: ['#eef7f0', '#bfd9c4', '#25613b'],
+    muted: ['var(--surface2)', 'var(--border)', 'var(--text3)'],
+  }[tone] || ['var(--surface2)', 'var(--border)', 'var(--text3)'];
+
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: 24,
+    padding: '3px 8px',
+    borderRadius: 999,
+    border: `1px solid ${palette[1]}`,
+    background: palette[0],
+    color: palette[2],
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.2,
+  };
+}
+
+function modelSpecGridStyle() {
+  return {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 10,
+    padding: 10,
+    borderRadius: 10,
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+  };
+}
+
+function modelTestResultStyle(tone = 'neutral') {
+  const isOk = tone === 'ok';
+  return {
+    padding: 10,
+    borderRadius: 10,
+    border: `1px solid ${isOk ? '#bfd9c4' : 'var(--border)'}`,
+    background: isOk ? '#f6fbf7' : '#fffdf9',
+    color: 'var(--text2)',
+    fontSize: 12,
+    lineHeight: 1.65,
   };
 }

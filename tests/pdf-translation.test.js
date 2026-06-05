@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   cleanVisionTranslationText,
   createPageBatches,
+  createPageNumberBatches,
   hasRepetitiveGarbage,
   preserveOriginalReferences,
 } = require('../lib/services/pdf-translation');
@@ -15,6 +16,29 @@ test('createPageBatches groups pages for multi-image model calls', () => {
   assert.deepEqual(
     batches.map((batch) => batch.map((page) => page.pageNumber)),
     [[1, 2, 3], [4, 5, 6], [7]],
+  );
+});
+
+test('createPageNumberBatches covers every page in long PDFs', () => {
+  const batches = createPageNumberBatches(45, 3, 60);
+
+  assert.equal(batches.length, 15);
+  assert.deepEqual(batches[0], [1, 2, 3]);
+  assert.deepEqual(batches.at(-1), [43, 44, 45]);
+  assert.deepEqual(batches.flat(), Array.from({ length: 45 }, (_, index) => index + 1));
+});
+
+test('createPageNumberBatches can disable the translation page cap', () => {
+  const batches = createPageNumberBatches(45, 8, null);
+
+  assert.equal(batches.length, 6);
+  assert.deepEqual(batches.at(-1), [41, 42, 43, 44, 45]);
+});
+
+test('createPageNumberBatches rejects PDFs over configured hard cap', () => {
+  assert.throws(
+    () => createPageNumberBatches(45, 3, 20),
+    /PDF 共 45 页，已超过图片视觉翻译上限 20 页/,
   );
 });
 
