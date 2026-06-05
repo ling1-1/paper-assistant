@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  applyDefaultModelUpdate,
+  applyModelConfigSave,
+  createModelTestFeedback,
+} from '../lib/services/model-settings-state';
 import { canTranslatePdfState, createPdfHistoryItem } from '../lib/services/pdf-history';
 import { normalizePreviewForDisplay, segmentPreviewBlocks } from '../lib/services/preview-format';
 
@@ -333,6 +338,7 @@ export default function HomePage() {
   const [modelSaving, setModelSaving] = useState(false);
   const [modelConfigMessage, setModelConfigMessage] = useState('');
   const [modelTestingId, setModelTestingId] = useState('');
+  const [modelTestResults, setModelTestResults] = useState({});
   const [activeIntent, setActiveIntent] = useState('general');
   const [loading, setLoading] = useState(false);
   const [litQuery, setLitQuery] = useState('');
@@ -476,7 +482,10 @@ export default function HomePage() {
   const recentConversations = conversations.slice(0, 5);
   const currentModel = modelRegistry.find((item) => item.id === assistantModel)
     || (modelsLoaded ? BUILTIN_MODELS.find((item) => item.id === assistantModel) : null);
+  const defaultModel = modelRegistry.find((item) => item.id === defaultModelId)
+    || (modelsLoaded ? BUILTIN_MODELS.find((item) => item.id === defaultModelId) : null);
   const configuredModels = modelRegistry.filter((item) => item.configured);
+  const visionReadyModels = modelRegistry.filter((item) => item.supportsVision && item.visionConfigured);
   const missingModelConfig = modelsLoaded && currentModel && !currentModel.configured;
   const currentModelStatus = !modelsLoaded ? '加载中' : currentModel?.configured ? '已配置' : '待配置';
   const hasTranslationOutput = Boolean(translatedText.trim());
@@ -876,13 +885,20 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '保存模型配置失败'));
       }
 
-      setModelRegistry(payload.models || []);
-      setDefaultModelId(payload.defaultModel || defaultModelId);
+      const nextState = applyModelConfigSave({
+        assistantModel,
+        defaultModelId,
+        formModelId: modelForm.id,
+        payload,
+      });
+
+      setModelRegistry(nextState.models);
+      setDefaultModelId(nextState.defaultModelId);
       setModelsLoaded(true);
-      setAssistantModel(modelForm.id);
+      setAssistantModel(nextState.assistantModel);
       setModelForm(INITIAL_MODEL_FORM);
       setModelFormVisible(false);
-      setModelConfigMessage(payload.note ? `模型配置已保存。${payload.note}` : '模型配置已保存。');
+      setModelConfigMessage(nextState.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     } finally {
@@ -903,11 +919,17 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '设置默认模型失败'));
       }
 
-      setDefaultModelId(payload.defaultModel || modelId);
-      setModelRegistry(payload.models || []);
+      const nextState = applyDefaultModelUpdate({
+        assistantModel,
+        modelId,
+        payload,
+      });
+
+      setDefaultModelId(nextState.defaultModelId);
+      setModelRegistry(nextState.models);
       setModelsLoaded(true);
-      setAssistantModel(modelId);
-      setModelConfigMessage('默认模型已更新。');
+      setAssistantModel(nextState.assistantModel);
+      setModelConfigMessage(nextState.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     }
@@ -951,22 +973,17 @@ export default function HomePage() {
         throw new Error(formatApiError(response, payload, rawText, '模型测试失败'));
       }
 
-      const textMessage = payload.test?.text?.skipped
-        ? `文本未测试：${payload.test?.text?.message || '本次未测试'}`
-        : payload.test?.text?.success
-        ? `文本可用：${payload.test?.text?.message || '模型可用'}`
-        : `文本不可用：${payload.test?.text?.message || '测试失败'}`;
-      const visionMessage = payload.test?.vision?.skipped
-        ? `视觉未执行：${payload.test?.vision?.message || '未测试视觉能力'}`
-        : payload.test?.vision?.success
-          ? `视觉可用：${payload.test.vision.message}`
-          : `视觉不可用：${payload.test?.vision?.message || '测试失败'}`;
-
-      const independenceNote = payload.test?.text?.success && !payload.test?.vision?.success
-        ? '文本模型仍可用于写作、文献和文本翻译；视觉失败只影响图片页 PDF 翻译。'
-        : '';
-
-      setModelConfigMessage(`测试完成。${textMessage}；${visionMessage}${independenceNote ? `。${independenceNote}` : ''}`);
+      const feedback = createModelTestFeedback({ assistantModel, payload });
+      setAssistantModel(feedback.assistantModel);
+      setModelTestResults((current) => ({
+        ...current,
+        [modelId]: {
+          test: feedback.test,
+          message: feedback.message,
+          testedAt: new Date().toISOString(),
+        },
+      }));
+      setModelConfigMessage(feedback.message);
     } catch (error) {
       setModelConfigMessage(error.message);
     } finally {
@@ -2276,61 +2293,40 @@ function editModel(model) {
                 <div style={{ fontSize: 26, fontWeight: 700 }}>工作台设置</div>
               </div>
               <button onClick={() => setModelFormVisible((current) => !current)} style={secondaryButtonStyle()}>
-                {modelFormVisible ? '收起新增模型' : '新增模型'}
+                {modelFormVisible ? '收起配置面板' : '新增模型'}
               </button>
             </header>
 
             <div style={{ display: 'grid', gap: 14, overflowY: 'auto', minHeight: 0, paddingRight: 4 }}>
-              <SettingsSection title="默认模型">
-                <div style={{ display: 'grid', gap: 8 }}>
+              <SettingsSection title="模型配置中心">
+                <div style={modelSummaryGridStyle()}>
+                  <ModelSummaryCard label="当前使用" value={currentModel?.label || assistantModel || '未选择'} detail={currentModelStatus} />
+                  <ModelSummaryCard label="默认模型" value={defaultModel?.label || defaultModelId || '未设置'} detail="不会自动切换当前会话" />
+                  <ModelSummaryCard label="可调用模型" value={`${configuredModels.length} / ${modelRegistry.length}`} detail="文本能力可用于写作与翻译" />
+                  <ModelSummaryCard label="视觉能力" value={`${visionReadyModels.length} 个`} detail="影响图片页 PDF 翻译" />
+                </div>
+
+                <div style={modelCardGridStyle()}>
                   {modelRegistry.map((item) => (
-                    <div key={item.id} style={settingOptionStyle(item.id === assistantModel)}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{item.label}</div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            {item.source === 'custom' ? '自定义模型' : item.provider} · {item.apiStyle || 'chat-completions'} · {item.configured ? '已配置' : '未配置'}
-                          </div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            文本模型：{item.textModel || '未填写'}{item.supportsVision ? ` · 视觉模型：${item.visionModel || '未填写'}` : ''}
-                          </div>
-                          <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
-                            文本：{item.textConfigured || item.configured ? '可用' : '待配置'} · 视觉：{item.supportsVision ? (item.visionConfigured ? '可用' : '独立待配置') : '未启用'}
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                          <button onClick={() => setAssistantModel(item.id)} style={secondaryButtonStyle()}>
-                            当前使用
-                          </button>
-                          <button onClick={() => chooseDefaultModel(item.id)} style={secondaryButtonStyle()}>
-                            {defaultModelId === item.id ? '默认模型' : '设为默认'}
-                          </button>
-                          <button onClick={() => testModel(item.id, 'text')} disabled={modelTestingId === `${item.id}:text`} style={secondaryButtonStyle()}>
-                            {modelTestingId === `${item.id}:text` ? '测试中…' : '测试文本'}
-                          </button>
-                          {item.supportsVision && (
-                            <button onClick={() => testModel(item.id, 'vision')} disabled={modelTestingId === `${item.id}:vision`} style={secondaryButtonStyle()}>
-                              {modelTestingId === `${item.id}:vision` ? '测试中…' : '测试视觉'}
-                            </button>
-                          )}
-                          <button onClick={() => testModel(item.id, 'both')} disabled={modelTestingId === `${item.id}:both`} style={secondaryButtonStyle()}>
-                            {modelTestingId === `${item.id}:both` ? '测试中…' : '测试全部'}
-                          </button>
-                          <button onClick={() => editModel(item)} style={secondaryButtonStyle()}>
-                            修改配置
-                          </button>
-                          <button onClick={() => removeCustomModel(item.id)} style={secondaryButtonStyle()}>
-                            {item.source === 'builtin' ? '清除覆盖' : '删除'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <ModelConfigCard
+                      key={item.id}
+                      model={item}
+                      active={item.id === assistantModel}
+                      defaultModel={item.id === defaultModelId}
+                      testing={modelTestingId === `${item.id}:both`}
+                      testResult={modelTestResults[item.id]}
+                      onUse={() => setAssistantModel(item.id)}
+                      onSetDefault={() => chooseDefaultModel(item.id)}
+                      onTest={() => testModel(item.id, 'both')}
+                      onEdit={() => editModel(item)}
+                      onRemove={() => removeCustomModel(item.id)}
+                    />
                   ))}
                 </div>
               </SettingsSection>
 
               {modelFormVisible && (
-                <SettingsSection title="新增 OpenAI 兼容模型">
+                <SettingsSection title="新增 / 编辑 OpenAI 兼容模型">
                   <form onSubmit={saveModelConfig} style={{ display: 'grid', gap: 10 }}>
                     <div style={settingsGridStyle()}>
                       <label style={fieldStackStyle()}>
@@ -2401,9 +2397,9 @@ function editModel(model) {
                 </div>
               </SettingsSection>
 
-              <SettingsSection title="模型配置状态">
+              <SettingsSection title="测试与配置反馈">
                 <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.8 }}>
-                    当前共识别到 {modelRegistry.length} 个模型，其中 {configuredModels.length} 个已配置可调用。写作和翻译会优先使用“当前使用”模型，PDF 视觉翻译会自动寻找具备视觉能力的模型。
+                  当前共识别到 {modelRegistry.length} 个模型，其中 {configuredModels.length} 个已配置可调用。点击卡片右侧测试图标只会测试连通性，不会切换当前模型。
                 </div>
                 {modelConfigMessage && (
                   <div style={{ marginTop: 10, ...infoNoteStyle(missingModelConfig ? 'warn' : 'neutral') }}>
@@ -2654,6 +2650,187 @@ function PreviewTable({ rows = [] }) {
       </table>
     </div>
   );
+}
+
+function ModelSummaryCard({ label, value, detail }) {
+  return (
+    <div style={modelSummaryCardStyle()}>
+      <div style={{ color: 'var(--text3)', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', fontWeight: 700 }}>
+        {label}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>{value}</div>
+      <div style={{ marginTop: 6, color: 'var(--text3)', fontSize: 12, lineHeight: 1.5 }}>{detail}</div>
+    </div>
+  );
+}
+
+function ModelConfigCard({
+  model,
+  active,
+  defaultModel,
+  testing,
+  testResult,
+  onUse,
+  onSetDefault,
+  onTest,
+  onEdit,
+  onRemove,
+}) {
+  const sourceLabel = model.source === 'custom' ? '自定义' : '系统';
+  const textAvailable = Boolean(model.textConfigured || model.configured);
+  const visionLabel = model.supportsVision
+    ? model.visionConfigured ? '视觉可用' : '视觉待配置'
+    : '未启用视觉';
+  const testTone = testResult?.test?.text?.success && (testResult.test?.vision?.success || testResult.test?.vision?.skipped)
+    ? 'ok'
+    : 'neutral';
+
+  return (
+    <article style={modelCardStyle(active)}>
+      <div style={modelCardTopStyle()}>
+        <div style={{ minWidth: 0 }}>
+          <div style={modelCardTitleRowStyle()}>
+            <span style={modelAvatarStyle(model.label)}>{getModelInitial(model.label)}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {model.label}
+              </div>
+              <div style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+                {sourceLabel} · {model.provider || 'openai-compatible'} · {model.apiStyle || 'chat-completions'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={modelActionBarStyle()}>
+          <ModelIconButton title={active ? '当前正在使用' : '设为当前使用'} disabled={active} active={active} onClick={onUse}>
+            <ModelIcon name="target" />
+          </ModelIconButton>
+          <ModelIconButton title={defaultModel ? '默认模型' : '设为默认模型'} disabled={defaultModel} active={defaultModel} onClick={onSetDefault}>
+            <ModelIcon name="star" />
+          </ModelIconButton>
+          <ModelIconButton title="测试模型（文本与视觉）" disabled={testing} onClick={onTest}>
+            {testing ? <span style={{ fontWeight: 800 }}>…</span> : <ModelIcon name="pulse" />}
+          </ModelIconButton>
+          <ModelIconButton title="修改配置" onClick={onEdit}>
+            <ModelIcon name="edit" />
+          </ModelIconButton>
+          <ModelIconButton title={model.source === 'builtin' ? '清除自定义覆盖' : '删除模型'} danger onClick={onRemove}>
+            <ModelIcon name="trash" />
+          </ModelIconButton>
+        </div>
+      </div>
+
+      <div style={modelBadgeRowStyle()}>
+        {active && <ModelStatusPill tone="accent">当前使用</ModelStatusPill>}
+        {defaultModel && <ModelStatusPill tone="warm">默认</ModelStatusPill>}
+        <ModelStatusPill tone={model.configured ? 'ok' : 'muted'}>{model.configured ? '已配置' : '未配置'}</ModelStatusPill>
+        <ModelStatusPill tone={textAvailable ? 'ok' : 'muted'}>{textAvailable ? '文本可用' : '文本待配置'}</ModelStatusPill>
+        <ModelStatusPill tone={model.visionConfigured ? 'ok' : 'muted'}>{visionLabel}</ModelStatusPill>
+      </div>
+
+      <div style={modelSpecGridStyle()}>
+        <ModelSpec label="文本模型" value={model.textModel || '未填写'} />
+        <ModelSpec label="视觉模型" value={model.supportsVision ? (model.visionModel || '未填写') : '未启用'} />
+      </div>
+
+      {testResult?.message && (
+        <div style={modelTestResultStyle(testTone)}>
+          <div>{testResult.message}</div>
+          <div style={{ marginTop: 6, color: 'var(--text3)', fontSize: 11 }}>
+            最近测试：{formatTimeLabel(testResult.testedAt)}
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ModelSpec({ label, value }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ color: 'var(--text3)', fontSize: 11, marginBottom: 5 }}>{label}</div>
+      <div style={{ color: 'var(--text2)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={value}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function ModelStatusPill({ tone = 'muted', children }) {
+  return <span style={modelStatusPillStyle(tone)}>{children}</span>;
+}
+
+function ModelIconButton({ title, disabled = false, active = false, danger = false, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={modelIconButtonStyle({ active, danger, disabled })}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ModelIcon({ name }) {
+  if (name === 'star') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 3.8 14.7 9l5.8.8-4.2 4.1 1 5.8L12 17l-5.2 2.7 1-5.8-4.2-4.1L9.3 9 12 3.8Z" />
+      </svg>
+    );
+  }
+
+  if (name === 'pulse') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 12h4l2-5 4 10 2-5h4" />
+      </svg>
+    );
+  }
+
+  if (name === 'edit') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 19h4.2L18.4 9.8a2.1 2.1 0 0 0 0-3L17.2 5.6a2.1 2.1 0 0 0-3 0L5 14.8V19Z" />
+        <path d="m13.5 6.5 3 3" />
+      </svg>
+    );
+  }
+
+  if (name === 'trash') {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 7h14" />
+        <path d="M9 7V5h6v2" />
+        <path d="M8 10v8" />
+        <path d="M12 10v8" />
+        <path d="M16 10v8" />
+        <path d="M7 7l1 15h8l1-15" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M2 12h3" />
+      <path d="M19 12h3" />
+    </svg>
+  );
+}
+
+function getModelInitial(label = '') {
+  const trimmed = String(label).trim();
+  if (!trimmed) return 'M';
+  return trimmed.slice(0, 1).toUpperCase();
 }
 
 function SettingsSection({ title, children }) {
@@ -3661,16 +3838,161 @@ function settingsSectionStyle() {
   };
 }
 
-function settingOptionStyle(active) {
+function modelSummaryGridStyle() {
   return {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '10px 12px',
-    borderRadius: 8,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: 10,
+    marginBottom: 14,
+  };
+}
+
+function modelSummaryCardStyle() {
+  return {
+    padding: 14,
+    borderRadius: 10,
+    border: '1px solid var(--border)',
+    background: 'linear-gradient(180deg, #fffefc 0%, var(--surface2) 100%)',
+    minWidth: 0,
+  };
+}
+
+function modelCardGridStyle() {
+  return {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 12,
+  };
+}
+
+function modelCardStyle(active) {
+  return {
+    display: 'grid',
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
     border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
     background: active ? 'var(--accent-bg)' : 'var(--surface)',
-    fontSize: 13,
-    fontWeight: 600,
+    boxShadow: active ? '0 10px 26px rgba(55, 83, 112, 0.08)' : 'none',
+    minWidth: 0,
+  };
+}
+
+function modelCardTopStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  };
+}
+
+function modelCardTitleRowStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 0,
+  };
+}
+
+function modelAvatarStyle() {
+  return {
+    width: 34,
+    height: 34,
+    flexShrink: 0,
+    borderRadius: 10,
+    border: '1px solid var(--accent-border)',
+    background: 'var(--surface3)',
+    color: 'var(--accent)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 14,
+    fontWeight: 800,
+  };
+}
+
+function modelActionBarStyle() {
+  return {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 6,
+    flexShrink: 0,
+  };
+}
+
+function modelIconButtonStyle({ active = false, danger = false, disabled = false } = {}) {
+  return {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
+    background: active ? 'var(--surface3)' : 'var(--surface)',
+    color: danger ? 'var(--red)' : active ? 'var(--accent)' : 'var(--text2)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: disabled ? 0.58 : 1,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    padding: 0,
+  };
+}
+
+function modelBadgeRowStyle() {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+  };
+}
+
+function modelStatusPillStyle(tone = 'muted') {
+  const palette = {
+    accent: ['var(--accent-bg)', 'var(--accent-border)', 'var(--accent)'],
+    warm: ['#f8efe2', '#e0c9a6', '#7b5a22'],
+    ok: ['#eef7f0', '#bfd9c4', '#25613b'],
+    muted: ['var(--surface2)', 'var(--border)', 'var(--text3)'],
+  }[tone] || ['var(--surface2)', 'var(--border)', 'var(--text3)'];
+
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: 24,
+    padding: '3px 8px',
+    borderRadius: 999,
+    border: `1px solid ${palette[1]}`,
+    background: palette[0],
+    color: palette[2],
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.2,
+  };
+}
+
+function modelSpecGridStyle() {
+  return {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 10,
+    padding: 10,
+    borderRadius: 10,
+    background: 'var(--surface2)',
+    border: '1px solid var(--border)',
+  };
+}
+
+function modelTestResultStyle(tone = 'neutral') {
+  const isOk = tone === 'ok';
+  return {
+    padding: 10,
+    borderRadius: 10,
+    border: `1px solid ${isOk ? '#bfd9c4' : 'var(--border)'}`,
+    background: isOk ? '#f6fbf7' : '#fffdf9',
+    color: 'var(--text2)',
+    fontSize: 12,
+    lineHeight: 1.65,
   };
 }
